@@ -94,7 +94,12 @@ export default function RegisterPage() {
             employee_id: data.employeeId || null,
             student_id: data.studentId || null,
             phone_number: data.phoneNumber || null,
-          });
+            auth_provider: 'email',
+            registration_completed: true,
+            profile_completed: true,
+            email_verified: false,
+            is_active: true,
+          } as any);
 
         if (profileError) {
           console.error('Profile creation error:', profileError);
