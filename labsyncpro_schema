@@ -1,0 +1,1698 @@
+-- Enhanced Lab Management System Database Schema for Supabase
+-- Features: Inventory Management, Practical Records, Student Management, Scheduling, Consumables
+-- Enhanced: 2025-08-27
+-- FINAL VERSION - All conflicts resolved with proper cleanup
+
+-- Enable required extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- =============================================
+-- CLEANUP EXISTING OBJECTS (if they exist)
+-- =============================================
+
+-- Drop existing views (if they exist)
+DROP VIEW IF EXISTS equipment_usage_analytics;
+DROP VIEW IF EXISTS lab_utilization;
+DROP VIEW IF EXISTS consumable_stock_status;
+DROP VIEW IF EXISTS student_submission_details;
+DROP VIEW IF EXISTS practical_session_details;
+DROP VIEW IF EXISTS equipment_details;
+
+-- Drop existing functions (if they exist)
+DROP FUNCTION IF EXISTS checkout_equipment(UUID, UUID, UUID, TEXT);
+DROP FUNCTION IF EXISTS checkin_equipment(UUID, equipment_condition, TEXT, TEXT);
+DROP FUNCTION IF EXISTS log_activity();
+DROP FUNCTION IF EXISTS calculate_overall_grade();
+DROP FUNCTION IF EXISTS check_low_stock();
+DROP FUNCTION IF EXISTS update_consumable_stock();
+DROP FUNCTION IF EXISTS check_schedule_conflict();
+DROP FUNCTION IF EXISTS update_updated_at_column();
+
+-- Drop existing tables in reverse order of dependencies (if they exist)
+DROP TABLE IF EXISTS public.activity_logs CASCADE;
+DROP TABLE IF EXISTS public.consumable_alerts CASCADE;
+DROP TABLE IF EXISTS public.equipment_alerts CASCADE;
+DROP TABLE IF EXISTS public.notifications CASCADE;
+DROP TABLE IF EXISTS public.session_consumable_requirements CASCADE;
+DROP TABLE IF EXISTS public.session_equipment_requirements CASCADE;
+DROP TABLE IF EXISTS public.submission_grades CASCADE;
+DROP TABLE IF EXISTS public.practical_submissions CASCADE;
+DROP TABLE IF EXISTS public.grading_criteria CASCADE;
+DROP TABLE IF EXISTS public.grading_rubrics CASCADE;
+DROP TABLE IF EXISTS public.practical_attendance CASCADE;
+DROP TABLE IF EXISTS public.course_enrollments CASCADE;
+DROP TABLE IF EXISTS public.practical_sessions CASCADE;
+DROP TABLE IF EXISTS public.equipment_usage_log CASCADE;
+DROP TABLE IF EXISTS public.maintenance_records CASCADE;
+DROP TABLE IF EXISTS public.equipment_transfers CASCADE;
+DROP TABLE IF EXISTS public.lab_consumable_stock CASCADE;
+DROP TABLE IF EXISTS public.consumable_transactions CASCADE;
+DROP TABLE IF EXISTS public.consumables CASCADE;
+DROP TABLE IF EXISTS public.equipment CASCADE;
+DROP TABLE IF EXISTS public.suppliers CASCADE;
+DROP TABLE IF EXISTS public.equipment_categories CASCADE;
+DROP TABLE IF EXISTS public.student_group_memberships CASCADE;
+DROP TABLE IF EXISTS public.student_groups CASCADE;
+DROP TABLE IF EXISTS public.courses CASCADE;
+DROP TABLE IF EXISTS public.lab_schedules CASCADE;
+DROP TABLE IF EXISTS public.lab_staff_assignments CASCADE;
+DROP TABLE IF EXISTS public.labs CASCADE;
+DROP TABLE IF EXISTS public.users CASCADE;
+
+-- Drop existing types (if they exist)
+DROP TYPE IF EXISTS grading_criterion_type CASCADE;
+DROP TYPE IF EXISTS transfer_status CASCADE;
+DROP TYPE IF EXISTS stock_transaction_type CASCADE;
+DROP TYPE IF EXISTS schedule_status CASCADE;
+DROP TYPE IF EXISTS priority_level CASCADE;
+DROP TYPE IF EXISTS maintenance_type CASCADE;
+DROP TYPE IF EXISTS submission_status CASCADE;
+DROP TYPE IF EXISTS practical_status CASCADE;
+DROP TYPE IF EXISTS equipment_condition CASCADE;
+DROP TYPE IF EXISTS equipment_status CASCADE;
+DROP TYPE IF EXISTS user_role CASCADE;
+
+-- =============================================
+-- ENUMS AND TYPES
+-- =============================================
+
+CREATE TYPE user_role AS ENUM ('super_admin', 'admin', 'lab_manager', 'instructor', 'student', 'lab_staff');
+CREATE TYPE equipment_status AS ENUM ('available', 'in_use', 'maintenance', 'damaged', 'retired');
+CREATE TYPE equipment_condition AS ENUM ('excellent', 'good', 'fair', 'poor', 'damaged');
+CREATE TYPE practical_status AS ENUM ('scheduled', 'in_progress', 'completed', 'cancelled');
+CREATE TYPE submission_status AS ENUM ('pending', 'submitted', 'graded', 'late');
+CREATE TYPE maintenance_type AS ENUM ('preventive', 'corrective', 'emergency', 'upgrade');
+CREATE TYPE priority_level AS ENUM ('low', 'medium', 'high', 'critical');
+CREATE TYPE schedule_status AS ENUM ('scheduled', 'confirmed', 'in_progress', 'completed', 'cancelled');
+CREATE TYPE stock_transaction_type AS ENUM ('stock_in', 'stock_out', 'adjustment', 'expired', 'damaged');
+CREATE TYPE transfer_status AS ENUM ('pending', 'in_transit', 'completed', 'cancelled');
+CREATE TYPE grading_criterion_type AS ENUM ('numeric', 'percentage', 'letter', 'boolean', 'text');
+
+-- =============================================
+-- CORE USER MANAGEMENT
+-- =============================================
+
+-- Users table (extends Supabase auth.users)
+CREATE TABLE public.users (
+    id UUID REFERENCES auth.users(id) ON DELETE CASCADE PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    first_name TEXT NOT NULL,
+    last_name TEXT NOT NULL,
+    role user_role NOT NULL DEFAULT 'student',
+    phone_number TEXT,
+    employee_id TEXT UNIQUE, -- For staff/faculty
+    student_id TEXT UNIQUE,  -- For students
+    department TEXT,
+    is_active BOOLEAN DEFAULT true,
+    is_archived BOOLEAN DEFAULT false, -- Soft delete flag
+    profile_image_url TEXT,
+    last_login TIMESTAMPTZ,
+    archived_at TIMESTAMPTZ,
+    archived_by UUID REFERENCES public.users(id),
+    -- OAuth and registration tracking
+    auth_provider TEXT DEFAULT 'email', -- 'email', 'google', 'apple'
+    provider_id TEXT, -- Provider-specific user ID
+    registration_completed BOOLEAN DEFAULT false, -- Has user completed full registration
+    profile_completed BOOLEAN DEFAULT false, -- Has user completed profile setup
+    email_verified BOOLEAN DEFAULT false, -- Email verification status
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- =============================================
+-- LABORATORY MANAGEMENT
+-- =============================================
+
+-- Labs/Rooms
+CREATE TABLE public.labs (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    name TEXT NOT NULL,
+    code TEXT UNIQUE NOT NULL, -- e.g., "LAB-CS-101"
+    description TEXT,
+    location TEXT NOT NULL,
+    floor_number INTEGER,
+    capacity INTEGER NOT NULL DEFAULT 0,
+    lab_manager_id UUID REFERENCES public.users(id), -- Primary manager
+    is_active BOOLEAN DEFAULT true,
+    is_archived BOOLEAN DEFAULT false,
+    archived_at TIMESTAMPTZ,
+    archived_by UUID REFERENCES public.users(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Lab Staff Assignments (Many-to-Many)
+CREATE TABLE public.lab_staff_assignments (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    lab_id UUID REFERENCES public.labs(id) ON DELETE CASCADE,
+    staff_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'assistant', -- 'manager', 'assistant', 'technician'
+    assigned_at TIMESTAMPTZ DEFAULT NOW(),
+    assigned_by UUID REFERENCES public.users(id),
+    is_active BOOLEAN DEFAULT true,
+    UNIQUE(lab_id, staff_id, role)
+);
+
+-- Lab Schedules (Prevent double booking)
+CREATE TABLE public.lab_schedules (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    lab_id UUID REFERENCES public.labs(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    description TEXT,
+    scheduled_by UUID REFERENCES public.users(id),
+    start_time TIMESTAMPTZ NOT NULL,
+    end_time TIMESTAMPTZ NOT NULL,
+    status schedule_status DEFAULT 'scheduled',
+    is_recurring BOOLEAN DEFAULT false,
+    recurrence_pattern JSONB, -- Store recurring schedule data
+    practical_session_id UUID, -- Forward reference - will be valid after practical_sessions table is created
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    
+    -- Constraint to prevent overlapping schedules
+    CONSTRAINT check_schedule_times CHECK (start_time < end_time)
+);
+
+-- Courses
+CREATE TABLE public.courses (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    code TEXT UNIQUE NOT NULL, -- e.g., "CS101"
+    name TEXT NOT NULL,
+    description TEXT,
+    department TEXT NOT NULL,
+    credits INTEGER DEFAULT 3,
+    semester TEXT, -- e.g., "Fall 2024"
+    instructor_id UUID REFERENCES public.users(id),
+    is_active BOOLEAN DEFAULT true,
+    is_archived BOOLEAN DEFAULT false,
+    archived_at TIMESTAMPTZ,
+    archived_by UUID REFERENCES public.users(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Student Groups/Batches
+CREATE TABLE public.student_groups (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    name TEXT NOT NULL, -- e.g., "CS101-Batch-A", "Group-1"
+    code TEXT UNIQUE NOT NULL,
+    course_id UUID REFERENCES public.courses(id),
+    description TEXT,
+    max_students INTEGER DEFAULT 30,
+    instructor_id UUID REFERENCES public.users(id),
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Student Group Memberships
+CREATE TABLE public.student_group_memberships (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    group_id UUID REFERENCES public.student_groups(id) ON DELETE CASCADE,
+    student_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+    joined_at TIMESTAMPTZ DEFAULT NOW(),
+    is_active BOOLEAN DEFAULT true,
+    UNIQUE(group_id, student_id)
+);
+
+-- =============================================
+-- INVENTORY MANAGEMENT (DURABLE EQUIPMENT)
+-- =============================================
+
+-- Equipment Categories
+CREATE TABLE public.equipment_categories (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    name TEXT NOT NULL,
+    code TEXT UNIQUE NOT NULL,
+    description TEXT,
+    parent_category_id UUID REFERENCES public.equipment_categories(id),
+    is_consumable BOOLEAN DEFAULT false, -- Flag for consumable vs durable
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Suppliers
+CREATE TABLE public.suppliers (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    name TEXT NOT NULL,
+    contact_person TEXT,
+    email TEXT,
+    phone TEXT,
+    address TEXT,
+    website TEXT,
+    is_active BOOLEAN DEFAULT true,
+    is_archived BOOLEAN DEFAULT false,
+    archived_at TIMESTAMPTZ,
+    archived_by UUID REFERENCES public.users(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Equipment/Inventory Items (Durable)
+CREATE TABLE public.equipment (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    name TEXT NOT NULL,
+    model TEXT,
+    brand TEXT,
+    serial_number TEXT UNIQUE,
+    asset_tag TEXT UNIQUE NOT NULL, -- Internal tracking number
+    category_id UUID REFERENCES public.equipment_categories(id),
+    lab_id UUID REFERENCES public.labs(id),
+    supplier_id UUID REFERENCES public.suppliers(id),
+    purchase_date DATE,
+    purchase_price DECIMAL(10,2),
+    warranty_end_date DATE,
+    status equipment_status DEFAULT 'available',
+    condition equipment_condition DEFAULT 'excellent',
+    specifications JSONB, -- Store technical specs as JSON
+    notes TEXT,
+    qr_code TEXT, -- For QR code scanning
+    location_details TEXT, -- Specific location within lab
+    assigned_to UUID REFERENCES public.users(id), -- Currently assigned user
+    is_archived BOOLEAN DEFAULT false,
+    archived_at TIMESTAMPTZ,
+    archived_by UUID REFERENCES public.users(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- =============================================
+-- CONSUMABLE INVENTORY MANAGEMENT
+-- =============================================
+
+-- Consumable Items
+CREATE TABLE public.consumables (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    sku TEXT UNIQUE, -- Stock Keeping Unit
+    category_id UUID REFERENCES public.equipment_categories(id),
+    supplier_id UUID REFERENCES public.suppliers(id),
+    unit_of_measurement TEXT NOT NULL, -- 'pieces', 'meters', 'liters', etc.
+    unit_cost DECIMAL(10,4),
+    reorder_level INTEGER DEFAULT 0, -- Minimum stock level for reordering
+    max_stock_level INTEGER,
+    current_stock INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT true,
+    is_archived BOOLEAN DEFAULT false,
+    archived_at TIMESTAMPTZ,
+    archived_by UUID REFERENCES public.users(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Consumable Stock Transactions
+CREATE TABLE public.consumable_transactions (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    consumable_id UUID REFERENCES public.consumables(id) ON DELETE CASCADE,
+    transaction_type stock_transaction_type NOT NULL,
+    quantity INTEGER NOT NULL,
+    unit_cost DECIMAL(10,4),
+    total_cost DECIMAL(10,2) GENERATED ALWAYS AS (quantity * unit_cost) STORED,
+    reference_number TEXT, -- PO number, invoice number, etc.
+    lab_id UUID REFERENCES public.labs(id),
+    requested_by UUID REFERENCES public.users(id),
+    approved_by UUID REFERENCES public.users(id),
+    practical_session_id UUID, -- Forward reference - will be valid after practical_sessions table is created
+    notes TEXT,
+    transaction_date TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Lab Consumable Stock (Per Lab Inventory)
+CREATE TABLE public.lab_consumable_stock (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    lab_id UUID REFERENCES public.labs(id) ON DELETE CASCADE,
+    consumable_id UUID REFERENCES public.consumables(id) ON DELETE CASCADE,
+    current_quantity INTEGER DEFAULT 0,
+    last_updated TIMESTAMPTZ DEFAULT NOW(),
+    updated_by UUID REFERENCES public.users(id),
+    UNIQUE(lab_id, consumable_id)
+);
+
+-- =============================================
+-- EQUIPMENT MOVEMENT AND TRANSFER
+-- =============================================
+
+-- Equipment Transfer Log
+CREATE TABLE public.equipment_transfers (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    equipment_id UUID REFERENCES public.equipment(id) ON DELETE CASCADE,
+    from_lab_id UUID REFERENCES public.labs(id),
+    to_lab_id UUID REFERENCES public.labs(id),
+    transfer_reason TEXT,
+    requested_by UUID REFERENCES public.users(id),
+    approved_by UUID REFERENCES public.users(id),
+    transferred_by UUID REFERENCES public.users(id),
+    status transfer_status DEFAULT 'pending',
+    requested_date TIMESTAMPTZ DEFAULT NOW(),
+    approved_date TIMESTAMPTZ,
+    completed_date TIMESTAMPTZ,
+    notes TEXT,
+    condition_before equipment_condition,
+    condition_after equipment_condition,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Equipment Maintenance Records
+CREATE TABLE public.maintenance_records (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    equipment_id UUID REFERENCES public.equipment(id) ON DELETE CASCADE,
+    maintenance_type maintenance_type NOT NULL,
+    description TEXT NOT NULL,
+    scheduled_date TIMESTAMPTZ,
+    completed_date TIMESTAMPTZ,
+    technician_id UUID REFERENCES public.users(id),
+    cost DECIMAL(10,2),
+    priority priority_level DEFAULT 'medium',
+    notes TEXT,
+    attachments JSONB, -- Store file URLs/paths
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Equipment Usage Log
+CREATE TABLE public.equipment_usage_log (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    equipment_id UUID REFERENCES public.equipment(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES public.users(id),
+    practical_session_id UUID, -- Forward reference - will be valid after practical_sessions table is created
+    checked_out_at TIMESTAMPTZ NOT NULL,
+    checked_in_at TIMESTAMPTZ,
+    condition_before equipment_condition,
+    condition_after equipment_condition,
+    notes TEXT,
+    issues_reported TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- =============================================
+-- PRACTICAL SESSIONS MANAGEMENT
+-- =============================================
+
+-- Practical Sessions
+CREATE TABLE public.practical_sessions (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT,
+    course_id UUID REFERENCES public.courses(id),
+    student_group_id UUID REFERENCES public.student_groups(id), -- Link to batch/group
+    lab_id UUID REFERENCES public.labs(id),
+    instructor_id UUID REFERENCES public.users(id),
+    scheduled_date TIMESTAMPTZ NOT NULL,
+    duration_minutes INTEGER DEFAULT 120,
+    max_students INTEGER,
+    status practical_status DEFAULT 'scheduled',
+    objectives JSONB, -- Learning objectives as JSON array
+    required_equipment JSONB, -- List of required equipment
+    required_consumables JSONB, -- List of required consumables
+    instructions TEXT,
+    is_archived BOOLEAN DEFAULT false,
+    archived_at TIMESTAMPTZ,
+    archived_by UUID REFERENCES public.users(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Student Enrollments in Courses
+CREATE TABLE public.course_enrollments (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    course_id UUID REFERENCES public.courses(id) ON DELETE CASCADE,
+    student_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+    enrolled_at TIMESTAMPTZ DEFAULT NOW(),
+    final_grade TEXT,
+    is_active BOOLEAN DEFAULT true,
+    is_archived BOOLEAN DEFAULT false,
+    archived_at TIMESTAMPTZ,
+    UNIQUE(course_id, student_id)
+);
+
+-- Practical Session Attendance
+CREATE TABLE public.practical_attendance (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    practical_session_id UUID REFERENCES public.practical_sessions(id) ON DELETE CASCADE,
+    student_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+    status TEXT CHECK (status IN ('present', 'absent', 'late', 'excused')) DEFAULT 'absent',
+    check_in_time TIMESTAMPTZ,
+    check_out_time TIMESTAMPTZ,
+    notes TEXT,
+    marked_by UUID REFERENCES public.users(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(practical_session_id, student_id)
+);
+
+-- =============================================
+-- ADVANCED GRADING SYSTEM
+-- =============================================
+
+-- Grading Rubrics
+CREATE TABLE public.grading_rubrics (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    course_id UUID REFERENCES public.courses(id),
+    practical_session_id UUID REFERENCES public.practical_sessions(id),
+    total_points DECIMAL(5,2) DEFAULT 100.00,
+    is_active BOOLEAN DEFAULT true,
+    created_by UUID REFERENCES public.users(id),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Grading Criteria (within rubrics)
+CREATE TABLE public.grading_criteria (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    rubric_id UUID REFERENCES public.grading_rubrics(id) ON DELETE CASCADE,
+    name TEXT NOT NULL, -- e.g., "Code Quality", "Documentation", "Functionality"
+    description TEXT,
+    max_points DECIMAL(5,2) NOT NULL,
+    weight_percentage DECIMAL(5,2) DEFAULT 0, -- Weight in overall grade
+    criterion_type grading_criterion_type DEFAULT 'numeric',
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Student Practical Submissions
+CREATE TABLE public.practical_submissions (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    practical_session_id UUID REFERENCES public.practical_sessions(id) ON DELETE CASCADE,
+    student_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+    submission_status submission_status DEFAULT 'pending',
+    submitted_at TIMESTAMPTZ,
+    late_submission BOOLEAN DEFAULT false,
+    submission_files JSONB, -- Store file URLs/paths as JSON
+    submission_text TEXT,
+    overall_grade DECIMAL(5,2),
+    max_grade DECIMAL(5,2) DEFAULT 100.00,
+    feedback TEXT,
+    graded_by UUID REFERENCES public.users(id),
+    graded_at TIMESTAMPTZ,
+    is_archived BOOLEAN DEFAULT false,
+    archived_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(practical_session_id, student_id)
+);
+
+-- Individual Criterion Grades
+CREATE TABLE public.submission_grades (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    submission_id UUID REFERENCES public.practical_submissions(id) ON DELETE CASCADE,
+    criterion_id UUID REFERENCES public.grading_criteria(id) ON DELETE CASCADE,
+    points_earned DECIMAL(5,2) NOT NULL,
+    comments TEXT,
+    graded_by UUID REFERENCES public.users(id),
+    graded_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(submission_id, criterion_id)
+);
+
+-- Practical Session Equipment Requirements
+CREATE TABLE public.session_equipment_requirements (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    practical_session_id UUID REFERENCES public.practical_sessions(id) ON DELETE CASCADE,
+    equipment_id UUID REFERENCES public.equipment(id),
+    quantity_required INTEGER DEFAULT 1,
+    is_mandatory BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(practical_session_id, equipment_id)
+);
+
+-- Practical Session Consumable Requirements
+CREATE TABLE public.session_consumable_requirements (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    practical_session_id UUID REFERENCES public.practical_sessions(id) ON DELETE CASCADE,
+    consumable_id UUID REFERENCES public.consumables(id),
+    quantity_required INTEGER DEFAULT 1,
+    is_mandatory BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(practical_session_id, consumable_id)
+);
+
+-- =============================================
+-- NOTIFICATIONS AND ALERTS
+-- =============================================
+
+-- System Notifications
+CREATE TABLE public.notifications (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    user_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    type TEXT CHECK (type IN ('info', 'warning', 'error', 'success')) DEFAULT 'info',
+    is_read BOOLEAN DEFAULT false,
+    related_entity_type TEXT, -- e.g., 'equipment', 'practical_session', 'schedule'
+    related_entity_id UUID,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Equipment Alerts (for maintenance, warranty expiry, etc.)
+CREATE TABLE public.equipment_alerts (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    equipment_id UUID REFERENCES public.equipment(id) ON DELETE CASCADE,
+    alert_type TEXT CHECK (alert_type IN ('maintenance_due', 'warranty_expiring', 'repair_needed', 'calibration_due')) NOT NULL,
+    message TEXT NOT NULL,
+    priority priority_level DEFAULT 'medium',
+    is_resolved BOOLEAN DEFAULT false,
+    resolved_at TIMESTAMPTZ,
+    resolved_by UUID REFERENCES public.users(id),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Consumable Stock Alerts
+CREATE TABLE public.consumable_alerts (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    consumable_id UUID REFERENCES public.consumables(id) ON DELETE CASCADE,
+    lab_id UUID REFERENCES public.labs(id),
+    alert_type TEXT CHECK (alert_type IN ('low_stock', 'out_of_stock', 'expired', 'reorder_needed')) NOT NULL,
+    current_quantity INTEGER,
+    threshold_quantity INTEGER,
+    message TEXT NOT NULL,
+    priority priority_level DEFAULT 'medium',
+    is_resolved BOOLEAN DEFAULT false,
+    resolved_at TIMESTAMPTZ,
+    resolved_by UUID REFERENCES public.users(id),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- =============================================
+-- SYSTEM LOGS AND AUDIT TRAIL
+-- =============================================
+
+-- Activity Logs
+CREATE TABLE public.activity_logs (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    user_id UUID REFERENCES public.users(id),
+    action TEXT NOT NULL,
+    entity_type TEXT NOT NULL, -- table name
+    entity_id UUID,
+    old_values JSONB,
+    new_values JSONB,
+    ip_address INET,
+    user_agent TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- =============================================
+-- ADD FOREIGN KEY CONSTRAINTS FOR FORWARD REFERENCES
+-- =============================================
+
+-- Add foreign key constraints that were deferred due to forward references
+ALTER TABLE public.lab_schedules 
+ADD CONSTRAINT fk_lab_schedules_practical_session 
+FOREIGN KEY (practical_session_id) REFERENCES public.practical_sessions(id);
+
+ALTER TABLE public.consumable_transactions 
+ADD CONSTRAINT fk_consumable_transactions_practical_session 
+FOREIGN KEY (practical_session_id) REFERENCES public.practical_sessions(id);
+
+ALTER TABLE public.equipment_usage_log 
+ADD CONSTRAINT fk_equipment_usage_log_practical_session 
+FOREIGN KEY (practical_session_id) REFERENCES public.practical_sessions(id);
+
+-- =============================================
+-- INDEXES FOR PERFORMANCE
+-- =============================================
+
+-- User indexes
+CREATE INDEX idx_users_role ON public.users(role);
+CREATE INDEX idx_users_department ON public.users(department);
+CREATE INDEX idx_users_student_id ON public.users(student_id) WHERE student_id IS NOT NULL;
+CREATE INDEX idx_users_employee_id ON public.users(employee_id) WHERE employee_id IS NOT NULL;
+CREATE INDEX idx_users_is_archived ON public.users(is_archived) WHERE is_archived = false;
+CREATE INDEX idx_users_auth_provider ON public.users(auth_provider);
+CREATE INDEX idx_users_provider_id ON public.users(provider_id) WHERE provider_id IS NOT NULL;
+CREATE INDEX idx_users_registration_completed ON public.users(registration_completed);
+CREATE INDEX idx_users_email_verified ON public.users(email_verified);
+
+-- Lab schedule indexes
+CREATE INDEX idx_lab_schedules_lab_time ON public.lab_schedules(lab_id, start_time, end_time);
+CREATE INDEX idx_lab_schedules_time_range ON public.lab_schedules(start_time, end_time);
+CREATE INDEX idx_lab_schedules_status ON public.lab_schedules(status);
+
+-- Equipment indexes
+CREATE INDEX idx_equipment_lab_id ON public.equipment(lab_id);
+CREATE INDEX idx_equipment_category_id ON public.equipment(category_id);
+CREATE INDEX idx_equipment_status ON public.equipment(status);
+CREATE INDEX idx_equipment_asset_tag ON public.equipment(asset_tag);
+CREATE INDEX idx_equipment_serial_number ON public.equipment(serial_number) WHERE serial_number IS NOT NULL;
+CREATE INDEX idx_equipment_is_archived ON public.equipment(is_archived) WHERE is_archived = false;
+
+-- Consumable indexes
+CREATE INDEX idx_consumables_category_id ON public.consumables(category_id);
+CREATE INDEX idx_consumables_current_stock ON public.consumables(current_stock);
+CREATE INDEX idx_consumables_reorder_level ON public.consumables(reorder_level);
+CREATE INDEX idx_consumable_transactions_consumable_id ON public.consumable_transactions(consumable_id);
+CREATE INDEX idx_consumable_transactions_type_date ON public.consumable_transactions(transaction_type, transaction_date);
+
+-- Equipment transfer indexes
+CREATE INDEX idx_equipment_transfers_equipment_id ON public.equipment_transfers(equipment_id);
+CREATE INDEX idx_equipment_transfers_status ON public.equipment_transfers(status);
+CREATE INDEX idx_equipment_transfers_date ON public.equipment_transfers(requested_date);
+
+-- Student group indexes
+CREATE INDEX idx_student_groups_course_id ON public.student_groups(course_id);
+CREATE INDEX idx_student_group_memberships_group_student ON public.student_group_memberships(group_id, student_id);
+
+-- Practical session indexes
+CREATE INDEX idx_practical_sessions_course_id ON public.practical_sessions(course_id);
+CREATE INDEX idx_practical_sessions_group_id ON public.practical_sessions(student_group_id);
+CREATE INDEX idx_practical_sessions_lab_id ON public.practical_sessions(lab_id);
+CREATE INDEX idx_practical_sessions_scheduled_date ON public.practical_sessions(scheduled_date);
+CREATE INDEX idx_practical_sessions_status ON public.practical_sessions(status);
+CREATE INDEX idx_practical_sessions_is_archived ON public.practical_sessions(is_archived) WHERE is_archived = false;
+
+-- Grading indexes
+CREATE INDEX idx_grading_rubrics_course_id ON public.grading_rubrics(course_id);
+CREATE INDEX idx_grading_criteria_rubric_id ON public.grading_criteria(rubric_id);
+CREATE INDEX idx_submission_grades_submission_id ON public.submission_grades(submission_id);
+CREATE INDEX idx_submission_grades_criterion_id ON public.submission_grades(criterion_id);
+
+-- Attendance and submission indexes
+CREATE INDEX idx_practical_attendance_session_student ON public.practical_attendance(practical_session_id, student_id);
+CREATE INDEX idx_practical_submissions_session_student ON public.practical_submissions(practical_session_id, student_id);
+CREATE INDEX idx_practical_submissions_status ON public.practical_submissions(submission_status);
+CREATE INDEX idx_practical_submissions_is_archived ON public.practical_submissions(is_archived) WHERE is_archived = false;
+
+-- Equipment usage log indexes
+CREATE INDEX idx_equipment_usage_log_equipment_id ON public.equipment_usage_log(equipment_id);
+CREATE INDEX idx_equipment_usage_log_user_id ON public.equipment_usage_log(user_id);
+CREATE INDEX idx_equipment_usage_log_checked_out ON public.equipment_usage_log(checked_out_at);
+
+-- Maintenance records indexes
+CREATE INDEX idx_maintenance_records_equipment_id ON public.maintenance_records(equipment_id);
+CREATE INDEX idx_maintenance_records_scheduled_date ON public.maintenance_records(scheduled_date);
+
+-- Notification indexes
+CREATE INDEX idx_notifications_user_id ON public.notifications(user_id);
+CREATE INDEX idx_notifications_is_read ON public.notifications(is_read);
+
+-- Alert indexes
+CREATE INDEX idx_equipment_alerts_equipment_id ON public.equipment_alerts(equipment_id);
+CREATE INDEX idx_equipment_alerts_is_resolved ON public.equipment_alerts(is_resolved);
+CREATE INDEX idx_consumable_alerts_consumable_id ON public.consumable_alerts(consumable_id);
+CREATE INDEX idx_consumable_alerts_lab_id ON public.consumable_alerts(lab_id);
+
+-- =============================================
+-- FUNCTIONS AND TRIGGERS
+-- =============================================
+
+-- Function to update the updated_at timestamp
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+-- Apply updated_at triggers to relevant tables
+CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON public.users FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_labs_updated_at BEFORE UPDATE ON public.labs FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_courses_updated_at BEFORE UPDATE ON public.courses FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_equipment_updated_at BEFORE UPDATE ON public.equipment FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_suppliers_updated_at BEFORE UPDATE ON public.suppliers FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_consumables_updated_at BEFORE UPDATE ON public.consumables FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_practical_sessions_updated_at BEFORE UPDATE ON public.practical_sessions FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_practical_submissions_updated_at BEFORE UPDATE ON public.practical_submissions FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_maintenance_records_updated_at BEFORE UPDATE ON public.maintenance_records FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_equipment_transfers_updated_at BEFORE UPDATE ON public.equipment_transfers FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_lab_schedules_updated_at BEFORE UPDATE ON public.lab_schedules FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_student_groups_updated_at BEFORE UPDATE ON public.student_groups FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_grading_rubrics_updated_at BEFORE UPDATE ON public.grading_rubrics FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Function to check for schedule conflicts
+CREATE OR REPLACE FUNCTION check_schedule_conflict()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Check for overlapping schedules in the same lab
+    IF EXISTS (
+        SELECT 1 FROM public.lab_schedules 
+        WHERE lab_id = NEW.lab_id 
+        AND id != COALESCE(NEW.id, '00000000-0000-0000-0000-000000000000'::UUID)
+        AND status NOT IN ('cancelled')
+        AND (
+            (NEW.start_time, NEW.end_time) OVERLAPS (start_time, end_time)
+        )
+    ) THEN
+        RAISE EXCEPTION 'Schedule conflict detected: Lab is already booked for the specified time period';
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER check_schedule_conflict_trigger 
+    BEFORE INSERT OR UPDATE ON public.lab_schedules 
+    FOR EACH ROW EXECUTE FUNCTION check_schedule_conflict();
+
+-- Function to update consumable stock after transactions
+CREATE OR REPLACE FUNCTION update_consumable_stock()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Update the main consumable stock
+    UPDATE public.consumables 
+    SET current_stock = current_stock + 
+        CASE 
+            WHEN NEW.transaction_type = 'stock_in' THEN NEW.quantity
+            WHEN NEW.transaction_type IN ('stock_out', 'expired', 'damaged') THEN -NEW.quantity
+            WHEN NEW.transaction_type = 'adjustment' THEN NEW.quantity
+            ELSE 0
+        END,
+        updated_at = NOW()
+    WHERE id = NEW.consumable_id;
+    
+    -- Update lab-specific stock if lab is specified
+    IF NEW.lab_id IS NOT NULL THEN
+        INSERT INTO public.lab_consumable_stock (lab_id, consumable_id, current_quantity, updated_by)
+        VALUES (NEW.lab_id, NEW.consumable_id, 
+            CASE 
+                WHEN NEW.transaction_type = 'stock_in' THEN NEW.quantity
+                WHEN NEW.transaction_type IN ('stock_out', 'expired', 'damaged') THEN -NEW.quantity
+                WHEN NEW.transaction_type = 'adjustment' THEN NEW.quantity
+                ELSE 0
+            END, 
+            NEW.requested_by)
+        ON CONFLICT (lab_id, consumable_id) 
+        DO UPDATE SET 
+            current_quantity = lab_consumable_stock.current_quantity + 
+                CASE 
+                    WHEN NEW.transaction_type = 'stock_in' THEN NEW.quantity
+                    WHEN NEW.transaction_type IN ('stock_out', 'expired', 'damaged') THEN -NEW.quantity
+                    WHEN NEW.transaction_type = 'adjustment' THEN NEW.quantity
+                    ELSE 0
+                END,
+            last_updated = NOW(),
+            updated_by = NEW.requested_by;
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER update_consumable_stock_trigger 
+    AFTER INSERT ON public.consumable_transactions 
+    FOR EACH ROW EXECUTE FUNCTION update_consumable_stock();
+
+-- Function to create low stock alerts
+CREATE OR REPLACE FUNCTION check_low_stock()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Check if stock has fallen below reorder level
+    IF NEW.current_quantity <= (SELECT COALESCE(reorder_level, 0) FROM public.consumables WHERE id = NEW.consumable_id) THEN
+        INSERT INTO public.consumable_alerts (
+            consumable_id,
+            lab_id,
+            alert_type,
+            current_quantity,
+            threshold_quantity,
+            message,
+            priority
+        ) VALUES (
+            NEW.consumable_id,
+            NEW.lab_id,
+            CASE WHEN NEW.current_quantity = 0 THEN 'out_of_stock' ELSE 'low_stock' END,
+            NEW.current_quantity,
+            (SELECT COALESCE(reorder_level, 0) FROM public.consumables WHERE id = NEW.consumable_id),
+            'Stock level is ' || 
+            CASE WHEN NEW.current_quantity = 0 THEN 'zero' ELSE 'below reorder threshold' END,
+            CASE WHEN NEW.current_quantity = 0 THEN 'high'::priority_level ELSE 'medium'::priority_level END
+        )
+        ON CONFLICT DO NOTHING; -- Avoid duplicate alerts
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER check_low_stock_trigger 
+    AFTER UPDATE OF current_quantity ON public.lab_consumable_stock 
+    FOR EACH ROW EXECUTE FUNCTION check_low_stock();
+
+-- Function to calculate overall grade from criterion grades
+CREATE OR REPLACE FUNCTION calculate_overall_grade()
+RETURNS TRIGGER AS $$
+DECLARE
+    total_grade DECIMAL(5,2) := 0;
+    total_possible DECIMAL(5,2) := 0;
+    submission_max_grade DECIMAL(5,2) := 100.00;
+BEGIN
+    -- Get the submission's max grade
+    SELECT max_grade INTO submission_max_grade
+    FROM public.practical_submissions 
+    WHERE id = COALESCE(NEW.submission_id, OLD.submission_id);
+    
+    -- Calculate weighted overall grade
+    SELECT 
+        COALESCE(SUM(sg.points_earned), 0),
+        COALESCE(SUM(gc.max_points), 0)
+    INTO total_grade, total_possible
+    FROM public.submission_grades sg
+    JOIN public.grading_criteria gc ON sg.criterion_id = gc.id
+    WHERE sg.submission_id = COALESCE(NEW.submission_id, OLD.submission_id);
+    
+    -- Update the overall grade in practical_submissions
+    UPDATE public.practical_submissions 
+    SET overall_grade = CASE 
+        WHEN total_possible > 0 THEN ROUND((total_grade / total_possible) * submission_max_grade, 2)
+        ELSE 0 
+    END
+    WHERE id = COALESCE(NEW.submission_id, OLD.submission_id);
+    
+    RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER calculate_overall_grade_trigger 
+    AFTER INSERT OR UPDATE OR DELETE ON public.submission_grades 
+    FOR EACH ROW EXECUTE FUNCTION calculate_overall_grade();
+
+-- Function to create activity logs automatically
+CREATE OR REPLACE FUNCTION log_activity()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        INSERT INTO public.activity_logs (user_id, action, entity_type, entity_id, new_values)
+        VALUES (auth.uid(), TG_OP, TG_TABLE_NAME, NEW.id, to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF TG_OP = 'UPDATE' THEN
+        INSERT INTO public.activity_logs (user_id, action, entity_type, entity_id, old_values, new_values)
+        VALUES (auth.uid(), TG_OP, TG_TABLE_NAME, NEW.id, to_jsonb(OLD), to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF TG_OP = 'DELETE' THEN
+        INSERT INTO public.activity_logs (user_id, action, entity_type, entity_id, old_values)
+        VALUES (auth.uid(), TG_OP, TG_TABLE_NAME, OLD.id, to_jsonb(OLD));
+        RETURN OLD;
+    END IF;
+    RETURN NULL;
+END;
+$$ language 'plpgsql';
+
+-- Apply activity logging to key tables
+CREATE TRIGGER log_equipment_activity AFTER INSERT OR UPDATE OR DELETE ON public.equipment FOR EACH ROW EXECUTE FUNCTION log_activity();
+CREATE TRIGGER log_practical_sessions_activity AFTER INSERT OR UPDATE OR DELETE ON public.practical_sessions FOR EACH ROW EXECUTE FUNCTION log_activity();
+CREATE TRIGGER log_practical_submissions_activity AFTER INSERT OR UPDATE OR DELETE ON public.practical_submissions FOR EACH ROW EXECUTE FUNCTION log_activity();
+CREATE TRIGGER log_equipment_transfers_activity AFTER INSERT OR UPDATE OR DELETE ON public.equipment_transfers FOR EACH ROW EXECUTE FUNCTION log_activity();
+CREATE TRIGGER log_consumable_transactions_activity AFTER INSERT OR UPDATE OR DELETE ON public.consumable_transactions FOR EACH ROW EXECUTE FUNCTION log_activity();
+
+-- =============================================
+-- ROW LEVEL SECURITY (RLS) POLICIES
+-- =============================================
+
+-- Enable RLS on all tables
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.labs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.lab_staff_assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.lab_schedules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.courses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.student_groups ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.student_group_memberships ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.equipment_categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.suppliers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.equipment ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.consumables ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.consumable_transactions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.lab_consumable_stock ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.equipment_transfers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.maintenance_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.equipment_usage_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.practical_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.course_enrollments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.practical_attendance ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.grading_rubrics ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.grading_criteria ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.practical_submissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.submission_grades ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.session_equipment_requirements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.session_consumable_requirements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.equipment_alerts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.consumable_alerts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.activity_logs ENABLE ROW LEVEL SECURITY;
+
+-- Users policies
+CREATE POLICY "Users can view their own profile and public profiles" ON public.users FOR SELECT USING (
+    auth.uid() = id OR 
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager', 'instructor', 'lab_staff')
+);
+
+CREATE POLICY "Users can update their own profile" ON public.users FOR UPDATE USING (auth.uid() = id);
+
+CREATE POLICY "Admins can manage users" ON public.users FOR ALL USING (
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin')
+);
+
+-- Labs policies
+CREATE POLICY "Everyone can view active labs" ON public.labs FOR SELECT USING (is_archived = false);
+
+CREATE POLICY "Lab managers and admins can manage labs" ON public.labs FOR ALL USING (
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager') OR
+    lab_manager_id = auth.uid()
+);
+
+-- Lab staff assignments policies
+CREATE POLICY "Lab staff can view assignments for their labs" ON public.lab_staff_assignments FOR SELECT USING (
+    staff_id = auth.uid() OR
+    lab_id IN (SELECT id FROM public.labs WHERE lab_manager_id = auth.uid()) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+CREATE POLICY "Lab managers can manage staff assignments" ON public.lab_staff_assignments FOR ALL USING (
+    lab_id IN (SELECT id FROM public.labs WHERE lab_manager_id = auth.uid()) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+-- Lab schedules policies
+CREATE POLICY "Everyone can view lab schedules" ON public.lab_schedules FOR SELECT TO authenticated;
+
+CREATE POLICY "Lab staff can manage schedules for their labs" ON public.lab_schedules FOR ALL USING (
+    scheduled_by = auth.uid() OR
+    lab_id IN (
+        SELECT lab_id FROM public.lab_staff_assignments 
+        WHERE staff_id = auth.uid() AND is_active = true
+    ) OR
+    lab_id IN (SELECT id FROM public.labs WHERE lab_manager_id = auth.uid()) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager', 'instructor')
+);
+
+-- Equipment policies
+CREATE POLICY "Everyone can view non-archived equipment" ON public.equipment FOR SELECT USING (is_archived = false);
+
+CREATE POLICY "Lab managers and admins can manage equipment" ON public.equipment FOR ALL USING (
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager') OR
+    lab_id IN (SELECT id FROM public.labs WHERE lab_manager_id = auth.uid()) OR
+    lab_id IN (
+        SELECT lab_id FROM public.lab_staff_assignments 
+        WHERE staff_id = auth.uid() AND is_active = true
+    )
+);
+
+-- Equipment categories policies
+CREATE POLICY "Everyone can view equipment categories" ON public.equipment_categories FOR SELECT TO authenticated;
+CREATE POLICY "Admins can manage equipment categories" ON public.equipment_categories FOR ALL USING (
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+-- Suppliers policies
+CREATE POLICY "Everyone can view active suppliers" ON public.suppliers FOR SELECT USING (is_archived = false);
+CREATE POLICY "Admins can manage suppliers" ON public.suppliers FOR ALL USING (
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+-- Consumables policies
+CREATE POLICY "Everyone can view active consumables" ON public.consumables FOR SELECT USING (is_archived = false);
+
+CREATE POLICY "Lab managers can manage consumables" ON public.consumables FOR ALL USING (
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+-- Consumable transactions policies
+CREATE POLICY "Users can view transactions for their labs" ON public.consumable_transactions FOR SELECT USING (
+    requested_by = auth.uid() OR
+    lab_id IN (SELECT id FROM public.labs WHERE lab_manager_id = auth.uid()) OR
+    lab_id IN (
+        SELECT lab_id FROM public.lab_staff_assignments 
+        WHERE staff_id = auth.uid() AND is_active = true
+    ) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+CREATE POLICY "Lab staff can create transactions" ON public.consumable_transactions FOR INSERT WITH CHECK (
+    requested_by = auth.uid() AND (
+        lab_id IN (SELECT id FROM public.labs WHERE lab_manager_id = auth.uid()) OR
+        lab_id IN (
+            SELECT lab_id FROM public.lab_staff_assignments 
+            WHERE staff_id = auth.uid() AND is_active = true
+        ) OR
+        (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager', 'lab_staff')
+    )
+);
+
+-- Lab consumable stock policies
+CREATE POLICY "Lab staff can view lab stock" ON public.lab_consumable_stock FOR SELECT USING (
+    lab_id IN (SELECT id FROM public.labs WHERE lab_manager_id = auth.uid()) OR
+    lab_id IN (
+        SELECT lab_id FROM public.lab_staff_assignments 
+        WHERE staff_id = auth.uid() AND is_active = true
+    ) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+-- Equipment transfers policies
+CREATE POLICY "Users can view transfers for their equipment/labs" ON public.equipment_transfers FOR SELECT USING (
+    requested_by = auth.uid() OR
+    from_lab_id IN (SELECT id FROM public.labs WHERE lab_manager_id = auth.uid()) OR
+    to_lab_id IN (SELECT id FROM public.labs WHERE lab_manager_id = auth.uid()) OR
+    from_lab_id IN (
+        SELECT lab_id FROM public.lab_staff_assignments 
+        WHERE staff_id = auth.uid() AND is_active = true
+    ) OR
+    to_lab_id IN (
+        SELECT lab_id FROM public.lab_staff_assignments 
+        WHERE staff_id = auth.uid() AND is_active = true
+    ) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+-- Maintenance records policies
+CREATE POLICY "Lab staff can view maintenance records for their equipment" ON public.maintenance_records FOR SELECT USING (
+    equipment_id IN (
+        SELECT id FROM public.equipment WHERE 
+        lab_id IN (SELECT id FROM public.labs WHERE lab_manager_id = auth.uid()) OR
+        lab_id IN (
+            SELECT lab_id FROM public.lab_staff_assignments 
+            WHERE staff_id = auth.uid() AND is_active = true
+        )
+    ) OR
+    technician_id = auth.uid() OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+-- Equipment usage log policies
+CREATE POLICY "Users can view equipment usage logs" ON public.equipment_usage_log FOR SELECT USING (
+    user_id = auth.uid() OR
+    equipment_id IN (
+        SELECT id FROM public.equipment WHERE lab_id IN (
+            SELECT id FROM public.labs WHERE lab_manager_id = auth.uid()
+        )
+    ) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager', 'instructor', 'lab_staff')
+);
+
+CREATE POLICY "Users can create their own usage logs" ON public.equipment_usage_log FOR INSERT WITH CHECK (
+    user_id = auth.uid()
+);
+
+-- Courses policies
+CREATE POLICY "Everyone can view active courses" ON public.courses FOR SELECT USING (is_archived = false);
+CREATE POLICY "Instructors can manage their courses" ON public.courses FOR ALL USING (
+    instructor_id = auth.uid() OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+-- Student groups policies
+CREATE POLICY "Users can view relevant student groups" ON public.student_groups FOR SELECT USING (
+    course_id IN (
+        SELECT course_id FROM public.course_enrollments 
+        WHERE student_id = auth.uid() AND is_active = true
+    ) OR
+    id IN (
+        SELECT group_id FROM public.student_group_memberships
+        WHERE student_id = auth.uid() AND is_active = true
+    ) OR
+    instructor_id = auth.uid() OR
+    course_id IN (SELECT id FROM public.courses WHERE instructor_id = auth.uid()) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager', 'instructor')
+);
+
+-- Student group memberships policies
+CREATE POLICY "Users can view group memberships" ON public.student_group_memberships FOR SELECT USING (
+    student_id = auth.uid() OR
+    group_id IN (
+        SELECT id FROM public.student_groups WHERE instructor_id = auth.uid()
+    ) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager', 'instructor')
+);
+
+-- Practical sessions policies
+CREATE POLICY "Students can view sessions for their enrolled courses/groups" ON public.practical_sessions FOR SELECT USING (
+    is_archived = false AND (
+        course_id IN (
+            SELECT course_id FROM public.course_enrollments 
+            WHERE student_id = auth.uid() AND is_active = true AND is_archived = false
+        ) OR
+        student_group_id IN (
+            SELECT group_id FROM public.student_group_memberships
+            WHERE student_id = auth.uid() AND is_active = true
+        ) OR
+        (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager', 'instructor', 'lab_staff')
+    )
+);
+
+CREATE POLICY "Instructors can manage their sessions" ON public.practical_sessions FOR ALL USING (
+    instructor_id = auth.uid() OR
+    course_id IN (SELECT id FROM public.courses WHERE instructor_id = auth.uid()) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+-- Course enrollment policies
+CREATE POLICY "Students can view their enrollments" ON public.course_enrollments FOR SELECT USING (
+    is_archived = false AND (
+        student_id = auth.uid() OR
+        (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager', 'instructor', 'lab_staff')
+    )
+);
+
+CREATE POLICY "Admins and instructors can manage enrollments" ON public.course_enrollments FOR ALL USING (
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin') OR
+    course_id IN (
+        SELECT id FROM public.courses WHERE instructor_id = auth.uid()
+    )
+);
+
+-- Practical attendance policies
+CREATE POLICY "Users can view attendance for their sessions/enrollments" ON public.practical_attendance FOR SELECT USING (
+    student_id = auth.uid() OR
+    practical_session_id IN (
+        SELECT id FROM public.practical_sessions WHERE instructor_id = auth.uid()
+    ) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager', 'instructor')
+);
+
+CREATE POLICY "Instructors can manage attendance" ON public.practical_attendance FOR ALL USING (
+    practical_session_id IN (
+        SELECT id FROM public.practical_sessions WHERE instructor_id = auth.uid()
+    ) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+-- Grading rubrics policies
+CREATE POLICY "Users can view rubrics for their courses/sessions" ON public.grading_rubrics FOR SELECT USING (
+    course_id IN (SELECT id FROM public.courses WHERE instructor_id = auth.uid()) OR
+    practical_session_id IN (
+        SELECT id FROM public.practical_sessions WHERE instructor_id = auth.uid()
+    ) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+CREATE POLICY "Instructors can manage rubrics" ON public.grading_rubrics FOR ALL USING (
+    created_by = auth.uid() OR
+    course_id IN (SELECT id FROM public.courses WHERE instructor_id = auth.uid()) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+-- Grading criteria policies
+CREATE POLICY "Users can view criteria for accessible rubrics" ON public.grading_criteria FOR SELECT USING (
+    rubric_id IN (
+        SELECT id FROM public.grading_rubrics WHERE 
+        course_id IN (SELECT id FROM public.courses WHERE instructor_id = auth.uid()) OR
+        practical_session_id IN (SELECT id FROM public.practical_sessions WHERE instructor_id = auth.uid())
+    ) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+-- Practical submissions policies
+CREATE POLICY "Students can manage their own submissions" ON public.practical_submissions FOR ALL USING (
+    is_archived = false AND (
+        student_id = auth.uid() OR
+        practical_session_id IN (
+            SELECT id FROM public.practical_sessions WHERE instructor_id = auth.uid()
+        ) OR
+        practical_session_id IN (
+            SELECT id FROM public.practical_sessions 
+            WHERE course_id IN (SELECT id FROM public.courses WHERE instructor_id = auth.uid())
+        ) OR
+        (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+    )
+);
+
+-- Submission grades policies
+CREATE POLICY "Users can view grades for their submissions/courses" ON public.submission_grades FOR SELECT USING (
+    submission_id IN (
+        SELECT id FROM public.practical_submissions WHERE student_id = auth.uid()
+    ) OR
+    submission_id IN (
+        SELECT ps.id FROM public.practical_submissions ps
+        JOIN public.practical_sessions psess ON ps.practical_session_id = psess.id
+        WHERE psess.instructor_id = auth.uid()
+    ) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+CREATE POLICY "Instructors can manage submission grades" ON public.submission_grades FOR ALL USING (
+    graded_by = auth.uid() OR
+    submission_id IN (
+        SELECT ps.id FROM public.practical_submissions ps
+        JOIN public.practical_sessions psess ON ps.practical_session_id = psess.id
+        WHERE psess.instructor_id = auth.uid()
+    ) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+-- Session requirements policies
+CREATE POLICY "Users can view equipment requirements for accessible sessions" ON public.session_equipment_requirements FOR SELECT USING (
+    practical_session_id IN (
+        SELECT id FROM public.practical_sessions WHERE instructor_id = auth.uid()
+    ) OR
+    practical_session_id IN (
+        SELECT ps.id FROM public.practical_sessions ps
+        JOIN public.course_enrollments ce ON ps.course_id = ce.course_id
+        WHERE ce.student_id = auth.uid() AND ce.is_active = true
+    ) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+CREATE POLICY "Users can view consumable requirements for accessible sessions" ON public.session_consumable_requirements FOR SELECT USING (
+    practical_session_id IN (
+        SELECT id FROM public.practical_sessions WHERE instructor_id = auth.uid()
+    ) OR
+    practical_session_id IN (
+        SELECT ps.id FROM public.practical_sessions ps
+        JOIN public.course_enrollments ce ON ps.course_id = ce.course_id
+        WHERE ce.student_id = auth.uid() AND ce.is_active = true
+    ) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+-- Notifications policies
+CREATE POLICY "Users can view their own notifications" ON public.notifications FOR SELECT USING (user_id = auth.uid());
+CREATE POLICY "Users can update their own notifications" ON public.notifications FOR UPDATE USING (user_id = auth.uid());
+
+-- Equipment alerts policies
+CREATE POLICY "Lab staff can view equipment alerts for their labs" ON public.equipment_alerts FOR SELECT USING (
+    equipment_id IN (
+        SELECT id FROM public.equipment WHERE 
+        lab_id IN (SELECT id FROM public.labs WHERE lab_manager_id = auth.uid()) OR
+        lab_id IN (
+            SELECT lab_id FROM public.lab_staff_assignments 
+            WHERE staff_id = auth.uid() AND is_active = true
+        )
+    ) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+-- Consumable alerts policies
+CREATE POLICY "Lab staff can view consumable alerts for their labs" ON public.consumable_alerts FOR SELECT USING (
+    lab_id IN (SELECT id FROM public.labs WHERE lab_manager_id = auth.uid()) OR
+    lab_id IN (
+        SELECT lab_id FROM public.lab_staff_assignments 
+        WHERE staff_id = auth.uid() AND is_active = true
+    ) OR
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin', 'lab_manager')
+);
+
+-- Activity logs policies (read-only for authorized users)
+CREATE POLICY "Admins can view activity logs" ON public.activity_logs FOR SELECT USING (
+    (SELECT role FROM public.users WHERE id = auth.uid() AND is_archived = false) IN ('super_admin', 'admin')
+);
+
+-- =============================================
+-- HELPFUL VIEWS
+-- =============================================
+
+-- Enhanced equipment view with full details
+CREATE VIEW equipment_details AS
+SELECT 
+    e.*,
+    ec.name as category_name,
+    ec.code as category_code,
+    l.name as lab_name,
+    l.code as lab_code,
+    l.location as lab_location,
+    s.name as supplier_name,
+    u.first_name || ' ' || u.last_name as assigned_to_name,
+    u.email as assigned_to_email,
+    CASE 
+        WHEN e.warranty_end_date < CURRENT_DATE THEN 'expired'
+        WHEN e.warranty_end_date <= CURRENT_DATE + INTERVAL '30 days' THEN 'expiring_soon'
+        ELSE 'valid'
+    END as warranty_status
+FROM public.equipment e
+LEFT JOIN public.equipment_categories ec ON e.category_id = ec.id
+LEFT JOIN public.labs l ON e.lab_id = l.id
+LEFT JOIN public.suppliers s ON e.supplier_id = s.id
+LEFT JOIN public.users u ON e.assigned_to = u.id
+WHERE e.is_archived = false;
+
+-- Enhanced practical session view with all related information
+CREATE VIEW practical_session_details AS
+SELECT 
+    ps.*,
+    c.name as course_name,
+    c.code as course_code,
+    c.department as course_department,
+    sg.name as group_name,
+    sg.code as group_code,
+    l.name as lab_name,
+    l.code as lab_code,
+    l.location as lab_location,
+    l.capacity as lab_capacity,
+    u.first_name || ' ' || u.last_name as instructor_name,
+    u.email as instructor_email,
+    (SELECT COUNT(*) FROM public.practical_attendance pa WHERE pa.practical_session_id = ps.id AND pa.status = 'present') as present_count,
+    (SELECT COUNT(*) FROM public.practical_submissions psub WHERE psub.practical_session_id = ps.id) as submission_count
+FROM public.practical_sessions ps
+LEFT JOIN public.courses c ON ps.course_id = c.id
+LEFT JOIN public.student_groups sg ON ps.student_group_id = sg.id
+LEFT JOIN public.labs l ON ps.lab_id = l.id
+LEFT JOIN public.users u ON ps.instructor_id = u.id
+WHERE ps.is_archived = false;
+
+-- Student submission details with comprehensive information
+CREATE VIEW student_submission_details AS
+SELECT 
+    ps.id,
+    ps.practical_session_id,
+    ps.submission_status,
+    ps.submitted_at,
+    ps.late_submission,
+    ps.submission_files,
+    ps.submission_text,
+    ps.overall_grade,
+    ps.max_grade,
+    ps.feedback,
+    ps.graded_by,
+    ps.graded_at,
+    ps.is_archived,
+    ps.archived_at,
+    ps.created_at,
+    ps.updated_at,
+    psd.title as practical_title,
+    psd.course_name,
+    psd.course_code,
+    psd.instructor_name,
+    psd.lab_name,
+    u.first_name || ' ' || u.last_name as student_name,
+    u.student_id as student_number,
+    u.email as student_email,
+    gr.name as rubric_name,
+    gr.total_points as rubric_total_points,
+    (SELECT COUNT(*) FROM public.submission_grades sg WHERE sg.submission_id = ps.id) as graded_criteria_count,
+    (SELECT COUNT(*) FROM public.grading_criteria gc 
+     JOIN public.grading_rubrics gr2 ON gc.rubric_id = gr2.id
+     WHERE gr2.practical_session_id = ps.practical_session_id) as total_criteria_count
+FROM public.practical_submissions ps
+JOIN public.practical_session_details psd ON ps.practical_session_id = psd.id
+JOIN public.users u ON ps.student_id = u.id
+LEFT JOIN public.grading_rubrics gr ON gr.practical_session_id = ps.practical_session_id
+WHERE ps.is_archived = false;
+
+-- Consumable stock status view
+CREATE VIEW consumable_stock_status AS
+SELECT 
+    c.*,
+    ec.name as category_name,
+    s.name as supplier_name,
+    CASE 
+        WHEN c.current_stock = 0 THEN 'out_of_stock'
+        WHEN c.current_stock <= c.reorder_level THEN 'low_stock'
+        WHEN c.current_stock >= c.max_stock_level THEN 'overstocked'
+        ELSE 'normal'
+    END as stock_status,
+    (SELECT SUM(lcs.current_quantity) 
+     FROM public.lab_consumable_stock lcs 
+     WHERE lcs.consumable_id = c.id) as total_lab_stock
+FROM public.consumables c
+LEFT JOIN public.equipment_categories ec ON c.category_id = ec.id
+LEFT JOIN public.suppliers s ON c.supplier_id = s.id
+WHERE c.is_archived = false;
+
+-- Lab utilization view
+CREATE VIEW lab_utilization AS
+SELECT 
+    l.*,
+    lm.first_name || ' ' || lm.last_name as manager_name,
+    (SELECT COUNT(*) FROM public.lab_schedules ls 
+     WHERE ls.lab_id = l.id 
+     AND ls.start_time >= CURRENT_DATE 
+     AND ls.start_time < CURRENT_DATE + INTERVAL '7 days'
+     AND ls.status NOT IN ('cancelled')) as upcoming_bookings_week,
+    (SELECT COUNT(DISTINCT staff_id) FROM public.lab_staff_assignments lsa 
+     WHERE lsa.lab_id = l.id AND lsa.is_active = true) as staff_count,
+    (SELECT COUNT(*) FROM public.equipment e 
+     WHERE e.lab_id = l.id AND e.status = 'available') as available_equipment_count,
+    (SELECT COUNT(*) FROM public.equipment e 
+     WHERE e.lab_id = l.id AND e.status = 'maintenance') as maintenance_equipment_count
+FROM public.labs l
+LEFT JOIN public.users lm ON l.lab_manager_id = lm.id
+WHERE l.is_archived = false;
+
+-- Equipment usage analytics view
+CREATE VIEW equipment_usage_analytics AS
+SELECT 
+    e.id,
+    e.name,
+    e.asset_tag,
+    e.lab_id,
+    l.name as lab_name,
+    COUNT(eul.id) as total_usage_sessions,
+    AVG(EXTRACT(EPOCH FROM (eul.checked_in_at - eul.checked_out_at))/3600) as avg_usage_hours,
+    MAX(eul.checked_out_at) as last_used_date,
+    COUNT(CASE WHEN eul.issues_reported IS NOT NULL THEN 1 END) as reported_issues_count,
+    AVG(CASE 
+        WHEN eul.condition_after = 'excellent' THEN 5
+        WHEN eul.condition_after = 'good' THEN 4
+        WHEN eul.condition_after = 'fair' THEN 3
+        WHEN eul.condition_after = 'poor' THEN 2
+        WHEN eul.condition_after = 'damaged' THEN 1
+        ELSE NULL
+    END) as avg_condition_rating
+FROM public.equipment e
+LEFT JOIN public.labs l ON e.lab_id = l.id
+LEFT JOIN public.equipment_usage_log eul ON e.id = eul.equipment_id
+WHERE e.is_archived = false
+GROUP BY e.id, e.name, e.asset_tag, e.lab_id, l.name;
+
+-- =============================================
+-- STORED PROCEDURES
+-- =============================================
+
+-- Enhanced equipment checkout procedure with conflict detection
+CREATE OR REPLACE FUNCTION checkout_equipment(
+    p_equipment_id UUID,
+    p_user_id UUID,
+    p_practical_session_id UUID DEFAULT NULL,
+    p_notes TEXT DEFAULT NULL
+)
+RETURNS JSONB AS $$
+DECLARE
+    equipment_info RECORD;
+BEGIN
+    -- Check if equipment exists and is available
+    SELECT 
+        status = 'available' as is_available,
+        name,
+        asset_tag,
+        lab_id,
+        condition
+    INTO equipment_info
+    FROM public.equipment
+    WHERE id = p_equipment_id AND is_archived = false;
+    
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'message', 'Equipment not found or has been archived'
+        );
+    END IF;
+    
+    IF NOT equipment_info.is_available THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'message', 'Equipment is not available for checkout',
+            'current_status', (SELECT status FROM public.equipment WHERE id = p_equipment_id)
+        );
+    END IF;
+    
+    -- Check if user has permission to checkout equipment
+    IF NOT EXISTS (
+        SELECT 1 FROM public.users 
+        WHERE id = p_user_id 
+        AND is_active = true 
+        AND is_archived = false
+    ) THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'message', 'User not found or inactive'
+        );
+    END IF;
+    
+    -- Update equipment status and assignment
+    UPDATE public.equipment
+    SET status = 'in_use',
+        assigned_to = p_user_id,
+        updated_at = NOW()
+    WHERE id = p_equipment_id;
+    
+    -- Create usage log entry
+    INSERT INTO public.equipment_usage_log (
+        equipment_id,
+        user_id,
+        practical_session_id,
+        checked_out_at,
+        condition_before,
+        notes
+    ) VALUES (
+        p_equipment_id,
+        p_user_id,
+        p_practical_session_id,
+        NOW(),
+        equipment_info.condition,
+        p_notes
+    );
+    
+    RETURN jsonb_build_object(
+        'success', true,
+        'message', 'Equipment checked out successfully',
+        'equipment_name', equipment_info.name,
+        'asset_tag', equipment_info.asset_tag,
+        'checked_out_at', NOW()
+    );
+    
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'message', 'Error during checkout: ' || SQLERRM
+        );
+END;
+$$ LANGUAGE plpgsql;
+
+-- Enhanced equipment checkin procedure
+CREATE OR REPLACE FUNCTION checkin_equipment(
+    p_equipment_id UUID,
+    p_condition equipment_condition DEFAULT 'good',
+    p_notes TEXT DEFAULT NULL,
+    p_issues_reported TEXT DEFAULT NULL
+)
+RETURNS JSONB AS $$
+DECLARE
+    usage_log_id UUID;
+    equipment_info RECORD;
+BEGIN
+    -- Get equipment info
+    SELECT name, asset_tag, status
+    INTO equipment_info
+    FROM public.equipment
+    WHERE id = p_equipment_id AND is_archived = false;
+    
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'message', 'Equipment not found or has been archived'
+        );
+    END IF;
+    
+    -- Find the latest checkout record for this equipment
+    SELECT id INTO usage_log_id
+    FROM public.equipment_usage_log
+    WHERE equipment_id = p_equipment_id
+    AND checked_in_at IS NULL
+    ORDER BY checked_out_at DESC
+    LIMIT 1;
+    
+    IF usage_log_id IS NULL THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'message', 'No active checkout found for this equipment'
+        );
+    END IF;
+    
+    -- Update the usage log
+    UPDATE public.equipment_usage_log
+    SET checked_in_at = NOW(),
+        condition_after = p_condition,
+        notes = COALESCE(notes, '') || COALESCE(' Check-in: ' || p_notes, ''),
+        issues_reported = p_issues_reported
+    WHERE id = usage_log_id;
+    
+    -- Update equipment status
+    UPDATE public.equipment
+    SET status = CASE 
+            WHEN p_condition IN ('damaged', 'poor') THEN 'maintenance'::equipment_status
+            ELSE 'available'::equipment_status
+        END,
+        condition = p_condition,
+        assigned_to = NULL,
+        updated_at = NOW()
+    WHERE id = p_equipment_id;
+    
+    -- Create alert if equipment needs attention
+    IF p_condition IN ('damaged', 'poor') OR p_issues_reported IS NOT NULL THEN
+        INSERT INTO public.equipment_alerts (
+            equipment_id,
+            alert_type,
+            message,
+            priority
+        ) VALUES (
+            p_equipment_id,
+            'repair_needed',
+            'Equipment returned with issues: ' || COALESCE(p_issues_reported, 'Condition: ' || p_condition::text),
+            CASE WHEN p_condition = 'damaged' THEN 'high'::priority_level ELSE 'medium'::priority_level END
+        );
+    END IF;
+    
+    RETURN jsonb_build_object(
+        'success', true,
+        'message', 'Equipment checked in successfully',
+        'equipment_name', equipment_info.name,
+        'asset_tag', equipment_info.asset_tag,
+        'condition', p_condition,
+        'checked_in_at', NOW()
+    );
+    
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'message', 'Error during checkin: ' || SQLERRM
+        );
+END;
+$$ LANGUAGE plpgsql;
+
+-- =============================================
+-- INITIAL DATA SEEDING
+-- =============================================
+
+-- Insert default equipment categories (including consumables)
+INSERT INTO public.equipment_categories (name, code, description, is_consumable) VALUES
+    ('Computers', 'COMP', 'Desktop and laptop computers', false),
+    ('Networking', 'NET', 'Network equipment and accessories', false),
+    ('Peripherals', 'PERI', 'Keyboards, mice, monitors, etc.', false),
+    ('Software', 'SOFT', 'Software licenses and applications', false),
+    ('Tools', 'TOOL', 'Development and testing tools', false),
+    ('Furniture', 'FURN', 'Desks, chairs, and lab furniture', false),
+    ('Cables & Connectors', 'CABLE', 'Various cables, adapters, and connectors', true),
+    ('Stationery', 'STAT', 'Paper, pens, notebooks, etc.', true),
+    ('Printer Supplies', 'PRINT', 'Ink cartridges, toners, paper', true),
+    ('Electronic Components', 'ELEC', 'Resistors, capacitors, LEDs, etc.', true),
+    ('Safety Equipment', 'SAFETY', 'First aid, safety gear, protective equipment', true);
+
+-- Insert subcategories
+INSERT INTO public.equipment_categories (name, code, description, parent_category_id, is_consumable) VALUES
+    ('Desktop PCs', 'COMP-DESK', 'Desktop computers', (SELECT id FROM public.equipment_categories WHERE code = 'COMP'), false),
+    ('Laptops', 'COMP-LAP', 'Laptop computers', (SELECT id FROM public.equipment_categories WHERE code = 'COMP'), false),
+    ('Monitors', 'PERI-MON', 'Display monitors', (SELECT id FROM public.equipment_categories WHERE code = 'PERI'), false),
+    ('Keyboards', 'PERI-KEY', 'Keyboards', (SELECT id FROM public.equipment_categories WHERE code = 'PERI'), false),
+    ('Mice', 'PERI-MOU', 'Computer mice', (SELECT id FROM public.equipment_categories WHERE code = 'PERI'), false),
+    ('Routers', 'NET-ROUT', 'Network routers', (SELECT id FROM public.equipment_categories WHERE code = 'NET'), false),
+    ('Switches', 'NET-SWIT', 'Network switches', (SELECT id FROM public.equipment_categories WHERE code = 'NET'), false),
+    ('USB Cables', 'CABLE-USB', 'USB cables of various types', (SELECT id FROM public.equipment_categories WHERE code = 'CABLE'), true),
+    ('HDMI Cables', 'CABLE-HDMI', 'HDMI cables', (SELECT id FROM public.equipment_categories WHERE code = 'CABLE'), true),
+    ('Ethernet Cables', 'CABLE-ETH', 'Network ethernet cables', (SELECT id FROM public.equipment_categories WHERE code = 'CABLE'), true);
+
+-- =============================================
+-- COMMENTS FOR DOCUMENTATION
+-- =============================================
+
+COMMENT ON TABLE public.users IS 'Extended user profiles with archival support';
+COMMENT ON TABLE public.labs IS 'Physical laboratory spaces with archival support';
+COMMENT ON TABLE public.lab_staff_assignments IS 'Many-to-many assignments of staff to labs';
+COMMENT ON TABLE public.lab_schedules IS 'Lab booking system with conflict detection';
+COMMENT ON TABLE public.courses IS 'Academic courses with archival support';
+COMMENT ON TABLE public.student_groups IS 'Student batches/groups for practical sessions';
+COMMENT ON TABLE public.student_group_memberships IS 'Student membership in groups';
+COMMENT ON TABLE public.equipment_categories IS 'Hierarchical categorization of equipment and consumables';
+COMMENT ON TABLE public.suppliers IS 'Vendors and suppliers for equipment/consumable procurement';
+COMMENT ON TABLE public.equipment IS 'Physical inventory items including computers, tools, furniture';
+COMMENT ON TABLE public.consumables IS 'Consumable inventory items with stock tracking';
+COMMENT ON TABLE public.consumable_transactions IS 'Stock in/out transactions for consumables';
+COMMENT ON TABLE public.lab_consumable_stock IS 'Per-lab consumable stock levels';
+COMMENT ON TABLE public.equipment_transfers IS 'Equipment movement between labs';
+COMMENT ON TABLE public.maintenance_records IS 'Maintenance history and schedules for equipment';
+COMMENT ON TABLE public.equipment_usage_log IS 'Track who uses what equipment and when';
+COMMENT ON TABLE public.practical_sessions IS 'Scheduled lab practical sessions for courses';
+COMMENT ON TABLE public.practical_attendance IS 'Student attendance tracking for lab sessions';
+COMMENT ON TABLE public.course_enrollments IS 'Student enrollment in courses';
+COMMENT ON TABLE public.grading_rubrics IS 'Multi-criteria grading rubrics';
+COMMENT ON TABLE public.grading_criteria IS 'Individual grading criteria within rubrics';
+COMMENT ON TABLE public.practical_submissions IS 'Student work submissions and grades for practicals';
+COMMENT ON TABLE public.submission_grades IS 'Individual criterion grades for submissions';
+COMMENT ON TABLE public.session_equipment_requirements IS 'Equipment requirements for practical sessions';
+COMMENT ON TABLE public.session_consumable_requirements IS 'Consumable requirements for practical sessions';
+COMMENT ON TABLE public.notifications IS 'System notifications for users';
+COMMENT ON TABLE public.equipment_alerts IS 'Automated alerts for equipment maintenance, warranty, etc.';
+COMMENT ON TABLE public.consumable_alerts IS 'Automated alerts for consumable stock levels';
+COMMENT ON TABLE public.activity_logs IS 'Audit trail of all system activities';
+
+-- End of Enhanced Lab Management System Schema
