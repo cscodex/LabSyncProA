@@ -14,6 +14,7 @@ export interface UserProfile {
   registration_completed: boolean;
   profile_completed: boolean;
   email_verified: boolean;
+  is_active: boolean;
   profile_image_url?: string;
   phone_number?: string;
   department?: string;
