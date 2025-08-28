@@ -52,7 +52,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Profile doesn't exist - try to create it
         console.log('Database profile not found, creating...');
 
-        const { error: insertError } = await supabase
+        const { error: insertError } = await (supabase as any)
           .from('users')
           .insert({
             id: authUser.id,
@@ -65,7 +65,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             profile_completed: false,
             email_verified: true,
             is_active: true,
-          } as any);
+          });
 
         if (insertError) {
           console.error('Failed to create database profile:', insertError);

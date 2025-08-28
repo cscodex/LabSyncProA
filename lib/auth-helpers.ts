@@ -129,12 +129,12 @@ export const handleOAuthProfile = async (user: User): Promise<UserProfile | null
 
     if (existingProfile) {
       // Update existing profile
-      const { data: updatedProfile, error: updateError } = await supabase
+      const { data: updatedProfile, error: updateError } = await (supabase as any)
         .from('users')
         .update({
           ...profileData,
           updated_at: new Date().toISOString(),
-        } as any)
+        })
         .eq('id', user.id)
         .select()
         .single();
@@ -147,9 +147,9 @@ export const handleOAuthProfile = async (user: User): Promise<UserProfile | null
       return updatedProfile;
     } else {
       // Create new profile
-      const { data: newProfile, error: insertError } = await supabase
+      const { data: newProfile, error: insertError } = await (supabase as any)
         .from('users')
-        .insert(profileData as any)
+        .insert(profileData)
         .select()
         .single();
 
@@ -176,14 +176,14 @@ export const completeUserProfile = async (
   const supabase = createSupabaseClient();
   
   try {
-    const { error } = await supabase
+    const { error } = await (supabase as any)
       .from('users')
       .update({
         ...profileData,
         profile_completed: true,
         registration_completed: true,
         updated_at: new Date().toISOString(),
-      } as any)
+      })
       .eq('id', userId);
 
     if (error) {

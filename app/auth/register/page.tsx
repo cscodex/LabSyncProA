@@ -82,7 +82,7 @@ export default function RegisterPage() {
 
       if (authData.user) {
         // Create user profile in our users table
-        const { error: profileError } = await supabase
+        const { error: profileError } = await (supabase as any)
           .from('users')
           .insert({
             id: authData.user.id,
@@ -99,7 +99,7 @@ export default function RegisterPage() {
             profile_completed: true,
             email_verified: false,
             is_active: true,
-          } as any);
+          });
 
         if (profileError) {
           console.error('Profile creation error:', profileError);
