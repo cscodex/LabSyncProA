@@ -364,10 +364,10 @@ export default function RegisterPage() {
             </div>
 
             <div className="flex items-start space-x-2">
-              <Checkbox 
-                id="acceptTerms" 
-                {...register('acceptTerms')}
+              <Checkbox
+                id="acceptTerms"
                 checked={acceptTerms}
+                onCheckedChange={(checked) => setValue('acceptTerms', checked as boolean)}
                 className="mt-1"
               />
               <Label htmlFor="acceptTerms" className="text-sm cursor-pointer leading-relaxed">
