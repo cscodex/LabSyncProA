@@ -42,36 +42,53 @@ WHERE pu.id IS NULL;
 -- PART 2: CREATE MISSING PROFILES
 -- ========================================
 
--- Create profiles for users who don't have them
-INSERT INTO public.users (
-    id, email, first_name, last_name, role, auth_provider,
-    registration_completed, profile_completed, email_verified, is_active,
-    created_at, updated_at
-)
-SELECT 
-    au.id,
-    au.email,
-    COALESCE(au.raw_user_meta_data->>'first_name', au.raw_user_meta_data->>'given_name', ''),
-    COALESCE(au.raw_user_meta_data->>'last_name', au.raw_user_meta_data->>'family_name', ''),
-    'student'::user_role,
-    CASE 
-        WHEN au.email LIKE '%@gmail.com' THEN 'google'
-        WHEN au.raw_user_meta_data->>'provider' = 'google' THEN 'google'
-        ELSE 'email'
-    END,
-    true,
-    false,
-    COALESCE(au.email_confirmed_at IS NOT NULL, false),
-    true,
-    au.created_at,
-    NOW()
-FROM auth.users au
-LEFT JOIN public.users pu ON au.id = pu.id
-WHERE pu.id IS NULL
-ON CONFLICT (id) DO NOTHING;
+-- Count missing profiles before creating them
+DO $$
+DECLARE
+    missing_count INTEGER;
+    created_count INTEGER;
+BEGIN
+    -- Count missing profiles
+    SELECT COUNT(*) INTO missing_count
+    FROM auth.users au
+    LEFT JOIN public.users pu ON au.id = pu.id
+    WHERE pu.id IS NULL;
 
-SELECT 'Created profiles for missing users:' as result, 
-       ROW_COUNT() as profiles_created;
+    RAISE NOTICE 'Found % users without profiles', missing_count;
+
+    -- Create profiles for users who don't have them
+    INSERT INTO public.users (
+        id, email, first_name, last_name, role, auth_provider,
+        registration_completed, profile_completed, email_verified, is_active,
+        created_at, updated_at
+    )
+    SELECT
+        au.id,
+        au.email,
+        COALESCE(au.raw_user_meta_data->>'first_name', au.raw_user_meta_data->>'given_name', ''),
+        COALESCE(au.raw_user_meta_data->>'last_name', au.raw_user_meta_data->>'family_name', ''),
+        'student'::user_role,
+        CASE
+            WHEN au.email LIKE '%@gmail.com' THEN 'google'
+            WHEN au.raw_user_meta_data->>'provider' = 'google' THEN 'google'
+            ELSE 'email'
+        END,
+        true,
+        false,
+        COALESCE(au.email_confirmed_at IS NOT NULL, false),
+        true,
+        au.created_at,
+        NOW()
+    FROM auth.users au
+    LEFT JOIN public.users pu ON au.id = pu.id
+    WHERE pu.id IS NULL
+    ON CONFLICT (id) DO NOTHING;
+
+    GET DIAGNOSTICS created_count = ROW_COUNT;
+    RAISE NOTICE 'Created % user profiles', created_count;
+END $$;
+
+SELECT 'Profile creation completed' as status;
 
 -- ========================================
 -- PART 3: EMAIL TESTING FUNCTIONS
