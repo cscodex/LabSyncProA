@@ -2,61 +2,42 @@
 -- Run this in Supabase SQL Editor
 
 -- ========================================
--- PART 1: CHECK CURRENT AUTH CONFIGURATION
+-- PART 1: CHECK CURRENT AUTH STATE
 -- ========================================
-
--- Check auth configuration
-SELECT 'CURRENT AUTH CONFIG:' as info;
-SELECT 
-    key,
-    value
-FROM auth.config 
-WHERE key IN (
-    'SITE_URL',
-    'EXTERNAL_EMAIL_ENABLED',
-    'MAILER_SECURE_EMAIL_CHANGE_ENABLED',
-    'SECURITY_UPDATE_PASSWORD_REQUIRE_REAUTHENTICATION'
-);
 
 -- Check if there are any auth users
 SELECT 'AUTH USERS COUNT:' as info;
 SELECT COUNT(*) as total_users FROM auth.users;
 
--- Check recent auth attempts
+-- Check recent auth attempts and recovery status
 SELECT 'RECENT AUTH ACTIVITY:' as info;
-SELECT 
+SELECT
     email,
     created_at,
     email_confirmed_at,
-    recovery_sent_at
-FROM auth.users 
-ORDER BY created_at DESC 
+    recovery_sent_at,
+    CASE
+        WHEN recovery_sent_at IS NOT NULL THEN 'Recovery email sent'
+        WHEN email_confirmed_at IS NOT NULL THEN 'Email confirmed'
+        ELSE 'Pending confirmation'
+    END as status
+FROM auth.users
+ORDER BY created_at DESC
+LIMIT 5;
+
+-- Check for users with recent recovery attempts
+SELECT 'RECENT RECOVERY ATTEMPTS:' as info;
+SELECT
+    email,
+    recovery_sent_at,
+    created_at
+FROM auth.users
+WHERE recovery_sent_at IS NOT NULL
+ORDER BY recovery_sent_at DESC
 LIMIT 5;
 
 -- ========================================
--- PART 2: UPDATE AUTH CONFIGURATION
--- ========================================
-
--- Ensure proper site URL is set
-INSERT INTO auth.config (key, value) 
-VALUES ('SITE_URL', 'https://labsyncpro-pptl.onrender.com')
-ON CONFLICT (key) 
-DO UPDATE SET value = 'https://labsyncpro-pptl.onrender.com';
-
--- Enable external email
-INSERT INTO auth.config (key, value) 
-VALUES ('EXTERNAL_EMAIL_ENABLED', 'true')
-ON CONFLICT (key) 
-DO UPDATE SET value = 'true';
-
--- Set proper redirect URLs
-INSERT INTO auth.config (key, value) 
-VALUES ('URI_ALLOW_LIST', 'https://labsyncpro-pptl.onrender.com/**,https://labsyncpro-pptl.onrender.com/auth/update-password')
-ON CONFLICT (key) 
-DO UPDATE SET value = 'https://labsyncpro-pptl.onrender.com/**,https://labsyncpro-pptl.onrender.com/auth/update-password';
-
--- ========================================
--- PART 3: TEST PASSWORD RESET FUNCTION
+-- PART 2: TEST PASSWORD RESET FUNCTION
 -- ========================================
 
 -- Create a test function to check password reset
@@ -105,26 +86,33 @@ END;
 $$;
 
 -- ========================================
--- PART 4: VERIFICATION QUERIES
+-- PART 3: VERIFICATION AND TESTING
 -- ========================================
-
-SELECT 'UPDATED AUTH CONFIG:' as info;
-SELECT 
-    key,
-    value
-FROM auth.config 
-WHERE key IN (
-    'SITE_URL',
-    'EXTERNAL_EMAIL_ENABLED',
-    'URI_ALLOW_LIST'
-);
 
 -- Test with a sample email (replace with actual user email)
 -- SELECT test_password_reset('your-test-email@example.com');
 
-RAISE NOTICE '=== PASSWORD RESET CONFIGURATION UPDATED ===';
+-- Check if any users have pending recovery tokens
+SELECT 'USERS WITH RECOVERY TOKENS:' as info;
+SELECT
+    email,
+    recovery_sent_at,
+    EXTRACT(EPOCH FROM (NOW() - recovery_sent_at))/3600 as hours_since_recovery
+FROM auth.users
+WHERE recovery_sent_at IS NOT NULL
+AND recovery_sent_at > NOW() - INTERVAL '24 hours'
+ORDER BY recovery_sent_at DESC;
+
+-- Clean up old recovery attempts (optional)
+-- UPDATE auth.users
+-- SET recovery_sent_at = NULL
+-- WHERE recovery_sent_at < NOW() - INTERVAL '24 hours';
+
+RAISE NOTICE '=== PASSWORD RESET DIAGNOSTICS COMPLETE ===';
 RAISE NOTICE 'Next steps:';
 RAISE NOTICE '1. Check Supabase Dashboard -> Auth -> Email Templates';
 RAISE NOTICE '2. Ensure Reset Password template is enabled';
 RAISE NOTICE '3. Test with: SELECT test_password_reset(''your-email@example.com'');';
 RAISE NOTICE '4. Check SMTP settings in Auth -> Settings';
+RAISE NOTICE '5. Verify NEXT_PUBLIC_SITE_URL is set in Render environment';
+RAISE NOTICE '6. Check that redirect URLs are configured in Supabase Auth settings';
