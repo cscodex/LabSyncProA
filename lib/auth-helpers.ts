@@ -134,7 +134,7 @@ export const handleOAuthProfile = async (user: User): Promise<UserProfile | null
         .update({
           ...profileData,
           updated_at: new Date().toISOString(),
-        })
+        } as any)
         .eq('id', user.id)
         .select()
         .single();
@@ -149,7 +149,7 @@ export const handleOAuthProfile = async (user: User): Promise<UserProfile | null
       // Create new profile
       const { data: newProfile, error: insertError } = await supabase
         .from('users')
-        .insert(profileData)
+        .insert(profileData as any)
         .select()
         .single();
 
@@ -183,7 +183,7 @@ export const completeUserProfile = async (
         profile_completed: true,
         registration_completed: true,
         updated_at: new Date().toISOString(),
-      })
+      } as any)
       .eq('id', userId);
 
     if (error) {
