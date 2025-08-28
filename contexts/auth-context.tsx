@@ -126,7 +126,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.log('Data to update:', data);
 
       // Update local state only for now
-      setUser(prev => prev ? { ...prev, ...data } : null);
+      setUser((prev: AuthUser | null) => prev ? { ...prev, ...data } : null);
       toast.success('Profile updated successfully (local only)');
     } catch (error) {
       console.error('Error updating profile:', error);
@@ -191,7 +191,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     getInitialSession();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+      async (event: string, session: any) => {
         console.log('Auth state changed:', event, session?.user?.email);
 
         if (!mounted) return;
