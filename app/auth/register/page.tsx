@@ -56,7 +56,7 @@ export default function RegisterPage() {
     setIsLoading(true);
 
     try {
-      // First, sign up the user
+      // Sign up the user with email confirmation
       const { data: authData, error: signUpError } = await supabase.auth.signUp({
         email: data.email,
         password: data.password,
