@@ -5,7 +5,6 @@ import { User } from '@supabase/supabase-js';
 import { createSupabaseClient } from '@/lib/supabase';
 import type { AuthUser, AuthContextType } from '@/types/auth.types';
 import { toast } from 'sonner';
-import { fetchUserProfileWithFallback } from '@/lib/database-health';
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -42,11 +41,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       console.log('Attempting to fetch database profile...');
 
-      // Use health check and fallback approach
-      const profile = await fetchUserProfileWithFallback(authUser.id);
-      const error = profile ? null : { code: 'PROFILE_FETCH_FAILED', message: 'Could not fetch profile' };
+      const { data: profile, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', authUser.id)
+        .single();
 
-      if (error && (error.code === 'PGRST116' || error.code === 'PROFILE_FETCH_FAILED')) {
+      if (error && error.code === 'PGRST116') {
         // Profile doesn't exist - try to create it
         console.log('Database profile not found, creating...');
 
@@ -72,21 +73,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       } else if (error) {
         console.error('Database query error:', error);
-
-        // If it's a timeout error, return basic user and continue
-        if (error.message === 'Database query timeout') {
-          console.log('Database timeout - returning basic user profile');
-          return {
-            ...basicUser,
-            role: 'student' as any,
-            department: null,
-            profile_image_url: null,
-            is_active: true,
-            employee_id: null,
-            student_id: null,
-            phone_number: null,
-          };
-        }
       } else if (profile) {
         // Profile found - update user object with database data
         console.log('Database profile found, updating user object');
