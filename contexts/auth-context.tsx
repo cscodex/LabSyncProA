@@ -151,15 +151,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
 
-    // Hard timeout to ensure loading never gets stuck
-    const hardTimeout = setTimeout(() => {
-      if (mounted) {
-        console.log('Hard timeout reached - forcing loading to false');
-        setLoading(false);
-        setInitialized(true);
-      }
-    }, 5000); // 5 second maximum
-
     const getInitialSession = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
@@ -211,7 +202,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       mounted = false;
-      clearTimeout(hardTimeout);
       subscription.unsubscribe();
     };
   }, []); // No dependencies to prevent loops
