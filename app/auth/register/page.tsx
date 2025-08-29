@@ -57,6 +57,15 @@ export default function RegisterPage() {
     setIsLoading(true);
 
     try {
+      // FORCE CONSOLE LOGS FOR RENDER DEBUGGING
+      console.log('🚀 REGISTRATION_START:', {
+        email: data.email,
+        timestamp: new Date().toISOString(),
+        siteUrl: process.env.NEXT_PUBLIC_SITE_URL,
+        supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL
+      });
+      console.error('🚀 REGISTRATION_START:', data.email); // Ensure visibility in Render
+
       // Debug environment variables
       debugEnvironment();
 

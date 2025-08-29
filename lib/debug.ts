@@ -22,14 +22,13 @@ export class EmailDebugger {
       siteUrl: process.env.NEXT_PUBLIC_SITE_URL,
     };
 
-    // Always log in production for debugging
-    if (this.isProduction) {
-      console.log('🔍 EMAIL_DEBUG:', JSON.stringify(logData, null, 2));
-    }
+    // ALWAYS log in production and development for debugging
+    console.log('🔍 EMAIL_DEBUG:', JSON.stringify(logData, null, 2));
+    console.error('🔍 EMAIL_DEBUG_ERROR:', JSON.stringify(logData, null, 2)); // Also log as error to ensure visibility
 
-    // Also log in development
-    if (this.isDevelopment) {
-      console.log('📧 EMAIL_DEBUG:', logData);
+    // Additional console methods to ensure visibility in Render
+    if (this.isProduction) {
+      console.warn('📧 RENDER_EMAIL_DEBUG:', JSON.stringify(logData, null, 2));
     }
   }
 

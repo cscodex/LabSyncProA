@@ -38,6 +38,15 @@ export default function ResetPasswordPage() {
     setIsLoading(true);
 
     try {
+      // FORCE CONSOLE LOGS FOR RENDER DEBUGGING
+      console.log('🔑 PASSWORD_RESET_START:', {
+        email: data.email,
+        timestamp: new Date().toISOString(),
+        siteUrl: process.env.NEXT_PUBLIC_SITE_URL,
+        redirectUrl: `${process.env.NEXT_PUBLIC_SITE_URL || window.location.origin}/auth/update-password`
+      });
+      console.error('🔑 PASSWORD_RESET_START:', data.email); // Ensure visibility in Render
+
       // Debug environment variables
       debugEnvironment();
 
