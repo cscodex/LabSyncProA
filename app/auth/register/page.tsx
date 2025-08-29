@@ -21,6 +21,7 @@ import { PasswordStrength } from '@/components/ui/password-strength';
 
 import { createSupabaseClient, handleSupabaseError } from '@/lib/supabase';
 import { registerSchema, type RegisterFormData } from '@/lib/validations/auth';
+import { EmailDebugger, debugEnvironment } from '@/lib/debug';
 import { DEPARTMENTS } from '@/types/auth.types';
 import { SocialAuthButtons } from '@/components/auth/social-auth-buttons';
 
@@ -56,6 +57,17 @@ export default function RegisterPage() {
     setIsLoading(true);
 
     try {
+      // Debug environment variables
+      debugEnvironment();
+
+      // Log registration attempt
+      EmailDebugger.logRegistration(data.email, {
+        action: 'registration_attempt',
+        role: data.role,
+        department: data.department,
+        redirectUrl: `${process.env.NEXT_PUBLIC_SITE_URL || window.location.origin}/auth/callback`,
+      });
+
       // Sign up the user with email confirmation
       const { data: authData, error: signUpError } = await supabase.auth.signUp({
         email: data.email,
@@ -74,7 +86,11 @@ export default function RegisterPage() {
         },
       });
 
+      // Log Supabase response
+      EmailDebugger.logSupabaseResponse(data.email, { data: authData, error: signUpError }, 'registration_signup');
+
       if (signUpError) {
+        EmailDebugger.logError(data.email, signUpError, 'registration_signup_error');
         const errorMessage = handleSupabaseError(signUpError);
         setError('root', { message: errorMessage });
         return;
@@ -102,14 +118,26 @@ export default function RegisterPage() {
           });
 
         if (profileError) {
+          EmailDebugger.logError(data.email, profileError, 'profile_creation_error');
           console.error('Profile creation error:', profileError);
           // Don't show error to user as the auth account was created successfully
+        } else {
+          EmailDebugger.logRegistration(data.email, {
+            action: 'profile_created_successfully',
+            userId: authData.user?.id,
+          });
         }
       }
 
       setEmailSent(true);
+      EmailDebugger.logRegistration(data.email, {
+        action: 'registration_completed',
+        emailSent: true,
+        needsEmailVerification: !authData.user?.email_confirmed_at,
+      });
       toast.success('Registration successful! Please check your email to verify your account.');
     } catch (error) {
+      EmailDebugger.logError(data.email, error, 'registration_catch_error');
       console.error('Registration error:', error);
       setError('root', { message: 'An unexpected error occurred' });
     } finally {

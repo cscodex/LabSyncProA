@@ -16,6 +16,7 @@ import { ThemeToggle } from '@/components/theme-toggle';
 
 import { createSupabaseClient, handleSupabaseError } from '@/lib/supabase';
 import { resetPasswordSchema, type ResetPasswordFormData } from '@/lib/validations/auth';
+import { EmailDebugger, debugEnvironment } from '@/lib/debug';
 
 export default function ResetPasswordPage() {
   const [isLoading, setIsLoading] = useState(false);
@@ -37,11 +38,24 @@ export default function ResetPasswordPage() {
     setIsLoading(true);
 
     try {
+      // Debug environment variables
+      debugEnvironment();
+
+      // Log password reset attempt
+      EmailDebugger.logPasswordReset(data.email, {
+        action: 'password_reset_attempt',
+        redirectUrl: `${process.env.NEXT_PUBLIC_SITE_URL || window.location.origin}/auth/update-password`,
+      });
+
       const { error } = await supabase.auth.resetPasswordForEmail(data.email, {
         redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL || window.location.origin}/auth/update-password`,
       });
 
+      // Log Supabase response
+      EmailDebugger.logSupabaseResponse(data.email, { error }, 'password_reset_request');
+
       if (error) {
+        EmailDebugger.logError(data.email, error, 'password_reset_error');
         const errorMessage = handleSupabaseError(error);
         setError('root', { message: errorMessage });
         return;
@@ -49,8 +63,13 @@ export default function ResetPasswordPage() {
 
       setEmail(data.email);
       setEmailSent(true);
+      EmailDebugger.logPasswordReset(data.email, {
+        action: 'password_reset_email_sent',
+        emailSent: true,
+      });
       toast.success('Password reset email sent!');
     } catch (error) {
+      EmailDebugger.logError(data.email, error, 'password_reset_catch_error');
       console.error('Reset password error:', error);
       setError('root', { message: 'An unexpected error occurred' });
     } finally {

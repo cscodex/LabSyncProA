@@ -11,6 +11,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ThemeToggle } from '@/components/theme-toggle';
 
 import { createSupabaseClient } from '@/lib/supabase';
+import { EmailDebugger } from '@/lib/debug';
 
 export default function AuthCallbackPage() {
   const [isLoading, setIsLoading] = useState(true);
@@ -19,17 +20,40 @@ export default function AuthCallbackPage() {
   const supabase = createSupabaseClient();
 
   useEffect(() => {
-    const handleAuthCallback = () => {
-      // Simple redirect to dashboard - let the auth context and route protection handle the rest
-      toast.success('Authentication completed!');
-      router.replace('/dashboard');
+    const handleAuthCallback = async () => {
+      try {
+        // Get current user to log the callback
+        const { data: { user }, error } = await supabase.auth.getUser();
+
+        if (user) {
+          EmailDebugger.logEmailConfirmation(user.email || 'unknown', {
+            action: 'auth_callback_success',
+            userId: user.id,
+            emailConfirmed: user.email_confirmed_at ? 'Yes' : 'No',
+            provider: user.app_metadata?.provider || 'email',
+          });
+        }
+
+        if (error) {
+          EmailDebugger.logError('unknown', error, 'auth_callback_error');
+          setError('Authentication failed. Please try again.');
+          return;
+        }
+
+        // Simple redirect to dashboard - let the auth context and route protection handle the rest
+        toast.success('Authentication completed!');
+        router.replace('/dashboard');
+      } catch (err) {
+        EmailDebugger.logError('unknown', err, 'auth_callback_catch_error');
+        setError('Authentication failed. Please try again.');
+      }
     };
 
     // Small delay to show the loading state, then redirect
     const timer = setTimeout(handleAuthCallback, 1000);
 
     return () => clearTimeout(timer);
-  }, [router]);
+  }, [router, supabase]);
 
   if (isLoading) {
     return (
