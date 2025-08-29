@@ -21,22 +21,31 @@ export async function GET(request: NextRequest) {
     console.error('🔍 EMAIL_STATUS_ENV:', JSON.stringify(envCheck, null, 2));
     
     // Test Supabase connection
-    const { data: testData, error: testError } = await supabase
+    const { count: userCount, error: testError } = await supabase
       .from('users')
-      .select('count')
-      .limit(1);
-    
-    console.log('🔍 SUPABASE_CONNECTION_TEST:', { 
-      success: !testError, 
+      .select('*', { count: 'exact', head: true });
+
+    console.log('🔍 SUPABASE_CONNECTION_TEST:', {
+      success: !testError,
       error: testError?.message,
-      data: testData ? 'Connected' : 'No data'
+      userCount: userCount || 0
     });
-    
-    // Get recent auth activity
-    const { data: recentUsers, error: usersError } = await supabase.auth.admin.listUsers({
-      page: 1,
-      perPage: 5
-    });
+
+    // Get recent auth activity (simplified)
+    let recentUsers: any = { users: [] };
+    let usersError: any = null;
+
+    try {
+      const authResult = await supabase.auth.admin.listUsers({
+        page: 1,
+        perPage: 5
+      });
+      recentUsers = authResult.data;
+      usersError = authResult.error;
+    } catch (err) {
+      usersError = { message: 'Failed to fetch auth users' };
+      console.error('Auth users fetch error:', err);
+    }
     
     const emailStatus = {
       timestamp: new Date().toISOString(),
@@ -48,7 +57,7 @@ export async function GET(request: NextRequest) {
       recentUsers: {
         count: recentUsers?.users?.length || 0,
         error: usersError?.message || null,
-        users: recentUsers?.users?.map(u => ({
+        users: recentUsers?.users?.map((u: any) => ({
           email: u.email,
           emailConfirmed: u.email_confirmed_at ? 'YES' : 'NO',
           createdAt: u.created_at,

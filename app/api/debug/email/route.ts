@@ -9,12 +9,13 @@ export async function GET(request: NextRequest) {
     // Get environment info
     const envInfo = debugEnvironment();
     
-    // Get recent auth users
-    const { data: users, error: usersError } = await supabase
-      .from('auth.users')
-      .select('id, email, created_at, email_confirmed_at, confirmation_sent_at, recovery_sent_at')
-      .order('created_at', { ascending: false })
-      .limit(10);
+    // Get recent auth users using admin API
+    const { data: authUsersData, error: usersError } = await supabase.auth.admin.listUsers({
+      page: 1,
+      perPage: 10
+    });
+
+    const users = authUsersData?.users || [];
 
     if (usersError) {
       console.error('Error fetching users:', usersError);
@@ -29,16 +30,22 @@ export async function GET(request: NextRequest) {
       timestamp: new Date().toISOString(),
       environment: envInfo,
       database: {
-        authUsers: users || [],
+        authUsers: users.map((u: any) => ({
+          id: u.id,
+          email: u.email,
+          created_at: u.created_at,
+          email_confirmed_at: u.email_confirmed_at,
+          last_sign_in_at: u.last_sign_in_at,
+        })),
         authUsersError: usersError,
         publicUsersCount: publicUsersCount || 0,
         publicUsersError: countError,
       },
       emailStatus: {
-        totalUsers: users?.length || 0,
-        confirmedUsers: users?.filter(u => u.email_confirmed_at).length || 0,
-        pendingUsers: users?.filter(u => !u.email_confirmed_at).length || 0,
-        recentRecovery: users?.filter(u => u.recovery_sent_at).length || 0,
+        totalUsers: users.length || 0,
+        confirmedUsers: users.filter((u: any) => u.email_confirmed_at).length || 0,
+        pendingUsers: users.filter((u: any) => !u.email_confirmed_at).length || 0,
+        recentRecovery: 0, // Will calculate separately
       },
     };
 
@@ -106,19 +113,29 @@ export async function POST(request: NextRequest) {
         });
 
       case 'check_user':
-        // Check if user exists
-        const { data: user, error } = await supabase
-          .from('auth.users')
-          .select('id, email, email_confirmed_at, created_at')
-          .eq('email', email)
-          .single();
+        // Check if user exists using admin API
+        try {
+          const { data: userData, error: userError } = await supabase.auth.admin.listUsers();
+          const user = userData?.users?.find((u: any) => u.email === email);
 
-        return NextResponse.json({
-          success: true,
-          user: user || null,
-          error: error?.message || null,
-          exists: !!user,
-        });
+          return NextResponse.json({
+            success: true,
+            user: user ? {
+              id: user.id,
+              email: user.email,
+              email_confirmed_at: user.email_confirmed_at,
+              created_at: user.created_at,
+            } : null,
+            error: userError?.message || null,
+            exists: !!user,
+          });
+        } catch (userCheckError) {
+          return NextResponse.json({
+            success: false,
+            error: 'Failed to check user',
+            exists: false,
+          });
+        }
 
       default:
         return NextResponse.json(
