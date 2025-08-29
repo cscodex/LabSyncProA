@@ -562,11 +562,13 @@ export default function UserManagementPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Departments</SelectItem>
-                    {getUniqueValues('department').map((dept) => (
-                      <SelectItem key={dept} value={dept as string}>
-                        {dept as string}
-                      </SelectItem>
-                    ))}
+                    {getUniqueValues('department')
+                      .filter((dept): dept is string => typeof dept === 'string')
+                      .map((dept) => (
+                        <SelectItem key={dept} value={dept}>
+                          {dept}
+                        </SelectItem>
+                      ))}
                   </SelectContent>
                 </Select>
               </div>
