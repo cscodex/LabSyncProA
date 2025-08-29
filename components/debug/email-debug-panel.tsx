@@ -4,9 +4,7 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Loader2, Mail, Database, Settings, CheckCircle, XCircle, Clock } from 'lucide-react';
 
 interface DebugInfo {
   timestamp: string;
@@ -59,7 +57,7 @@ export function EmailDebugPanel() {
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold">Email Debug Panel</h2>
         <Button onClick={fetchDebugInfo} disabled={isLoading}>
-          {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          {isLoading && <span className="mr-2">⏳</span>}
           Refresh Debug Info
         </Button>
       </div>
@@ -69,35 +67,34 @@ export function EmailDebugPanel() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Settings className="h-5 w-5" />
-              Environment Configuration
+              ⚙️ Environment Configuration
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <p className="font-medium">NODE_ENV</p>
-                <Badge variant={debugInfo.environment.NODE_ENV === 'production' ? 'default' : 'secondary'}>
+                <span className={`px-2 py-1 rounded text-xs ${debugInfo.environment.NODE_ENV === 'production' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
                   {debugInfo.environment.NODE_ENV}
-                </Badge>
+                </span>
               </div>
               <div>
                 <p className="font-medium">Site URL</p>
-                <Badge variant={debugInfo.environment.NEXT_PUBLIC_SITE_URL ? 'default' : 'destructive'}>
+                <span className={`px-2 py-1 rounded text-xs ${debugInfo.environment.NEXT_PUBLIC_SITE_URL ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
                   {debugInfo.environment.NEXT_PUBLIC_SITE_URL || 'Missing'}
-                </Badge>
+                </span>
               </div>
               <div>
                 <p className="font-medium">Supabase URL</p>
-                <Badge variant={debugInfo.environment.NEXT_PUBLIC_SUPABASE_URL ? 'default' : 'destructive'}>
+                <span className={`px-2 py-1 rounded text-xs ${debugInfo.environment.NEXT_PUBLIC_SUPABASE_URL ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
                   {debugInfo.environment.NEXT_PUBLIC_SUPABASE_URL ? 'Set' : 'Missing'}
-                </Badge>
+                </span>
               </div>
               <div>
                 <p className="font-medium">Anon Key</p>
-                <Badge variant={debugInfo.environment.NEXT_PUBLIC_SUPABASE_ANON_KEY === 'Set' ? 'default' : 'destructive'}>
+                <span className={`px-2 py-1 rounded text-xs ${debugInfo.environment.NEXT_PUBLIC_SUPABASE_ANON_KEY === 'Set' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
                   {debugInfo.environment.NEXT_PUBLIC_SUPABASE_ANON_KEY}
-                </Badge>
+                </span>
               </div>
             </div>
           </CardContent>
@@ -109,8 +106,7 @@ export function EmailDebugPanel() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Mail className="h-5 w-5" />
-              Email Status
+              📧 Email Status
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -141,8 +137,7 @@ export function EmailDebugPanel() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Database className="h-5 w-5" />
-              Recent Users
+              🗄️ Recent Users
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -157,15 +152,13 @@ export function EmailDebugPanel() {
                   </div>
                   <div className="flex items-center gap-2">
                     {user.email_confirmed_at ? (
-                      <Badge variant="default" className="flex items-center gap-1">
-                        <CheckCircle className="h-3 w-3" />
-                        Confirmed
-                      </Badge>
+                      <span className="px-2 py-1 rounded text-xs bg-green-100 text-green-800 flex items-center gap-1">
+                        ✓ Confirmed
+                      </span>
                     ) : (
-                      <Badge variant="secondary" className="flex items-center gap-1">
-                        <Clock className="h-3 w-3" />
-                        Pending
-                      </Badge>
+                      <span className="px-2 py-1 rounded text-xs bg-yellow-100 text-yellow-800 flex items-center gap-1">
+                        ⏳ Pending
+                      </span>
                     )}
                   </div>
                 </div>
