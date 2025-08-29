@@ -51,10 +51,21 @@ export default function UpdatePasswordPage() {
   const password = watch('password');
 
   useEffect(() => {
-    const checkSession = async () => {
+    const handlePasswordReset = async () => {
       try {
+        // First try to exchange any URL parameters for a session
+        const urlParams = new URLSearchParams(window.location.search);
+        const hasResetParams = urlParams.has('access_token') || urlParams.has('refresh_token');
+
+        if (hasResetParams) {
+          // Exchange the URL parameters for a session
+          const { data, error } = await supabase.auth.exchangeCodeForSession(window.location.href);
+          if (error) throw error;
+        }
+
+        // Now check if we have a valid session
         const { data: { session }, error } = await supabase.auth.getSession();
-        
+
         if (error || !session) {
           setIsValidSession(false);
           toast.error('Invalid or expired reset link. Please request a new one.');
@@ -62,14 +73,15 @@ export default function UpdatePasswordPage() {
           setIsValidSession(true);
         }
       } catch (error) {
-        console.error('Session check error:', error);
+        console.error('Password reset session error:', error);
         setIsValidSession(false);
+        toast.error('Invalid or expired reset link. Please request a new one.');
       } finally {
         setCheckingSession(false);
       }
     };
 
-    checkSession();
+    handlePasswordReset();
   }, [supabase]);
 
   const onSubmit = async (data: UpdatePasswordData) => {
