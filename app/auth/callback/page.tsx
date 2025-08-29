@@ -20,49 +20,8 @@ export default function AuthCallbackPage() {
   const supabase = createSupabaseClient();
 
   useEffect(() => {
-    const handleAuthCallback = async () => {
-      try {
-        console.log('Auth callback started');
-
-        // Handle OAuth callback by exchanging code for session
-        const { data, error } = await supabase.auth.exchangeCodeForSession(window.location.href);
-
-        if (error) {
-          console.error('Auth callback error:', error);
-          EmailDebugger.logError('unknown', error, 'auth_callback_error');
-          setError('Authentication failed. Please try again.');
-          setIsLoading(false);
-          return;
-        }
-
-        if (data.session?.user) {
-          console.log('Auth callback successful:', data.session.user.email);
-          EmailDebugger.logEmailConfirmation(data.session.user.email || 'unknown', {
-            action: 'auth_callback_success',
-            userId: data.session.user.id,
-            emailConfirmed: data.session.user.email_confirmed_at ? 'Yes' : 'No',
-            provider: data.session.user.app_metadata?.provider || 'email',
-          });
-
-          // Simple redirect to dashboard - let the auth context and route protection handle the rest
-          toast.success('Authentication completed!');
-          router.replace('/dashboard');
-        } else {
-          console.log('No session found in callback, redirecting to login');
-          router.replace('/auth/login');
-        }
-      } catch (err) {
-        console.error('Auth callback catch error:', err);
-        EmailDebugger.logError('unknown', err, 'auth_callback_catch_error');
-        setError('Authentication failed. Please try again.');
-        setIsLoading(false);
-      }
-    };
-
-    // Add a small delay to ensure the URL is processed
-    const timer = setTimeout(handleAuthCallback, 500);
-
-    return () => clearTimeout(timer);
+    // Just redirect to dashboard immediately - let auth context handle everything
+    router.replace('/dashboard');
   }, [router, supabase]);
 
   if (isLoading) {
