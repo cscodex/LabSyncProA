@@ -177,7 +177,7 @@ export default function UserManagementPage() {
 
   const handleToggleUserStatus = async (userId: string, currentStatus: boolean) => {
     try {
-      const { error } = await supabase
+      const { error } = await (supabase as any)
         .from('users')
         .update({ is_active: !currentStatus })
         .eq('id', userId);
@@ -237,7 +237,7 @@ export default function UserManagementPage() {
           if (authError) throw authError;
 
           // Create user profile
-          const { error: profileError } = await supabase
+          const { error: profileError } = await (supabase as any)
             .from('users')
             .insert({
               id: authData.user.id,
@@ -378,7 +378,7 @@ export default function UserManagementPage() {
 
   const handleApproveUser = async (userId: string) => {
     try {
-      const { error } = await supabase
+      const { error } = await (supabase as any)
         .from('users')
         .update({ is_active: true })
         .eq('id', userId);

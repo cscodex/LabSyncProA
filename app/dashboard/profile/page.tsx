@@ -111,7 +111,7 @@ export default function ProfilePage() {
     setIsLoading(true);
     try {
       // Update user profile in database
-      const { error } = await supabase
+      const { error } = await (supabase as any)
         .from('users')
         .update({
           first_name: data.first_name,

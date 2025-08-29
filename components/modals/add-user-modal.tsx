@@ -96,7 +96,7 @@ export function AddUserModal({ open, onOpenChange, onUserAdded }: AddUserModalPr
       if (authError) throw authError;
 
       // Create user profile in database
-      const { error: profileError } = await supabase
+      const { error: profileError } = await (supabase as any)
         .from('users')
         .insert({
           id: authData.user.id,

@@ -99,7 +99,7 @@ export function EditUserModal({ open, onOpenChange, user, onUserUpdated }: EditU
     setIsLoading(true);
     try {
       // Update user profile in database
-      const { error: profileError } = await supabase
+      const { error: profileError } = await (supabase as any)
         .from('users')
         .update({
           first_name: data.first_name,
