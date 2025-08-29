@@ -126,7 +126,7 @@ export function EditUserModal({ open, onOpenChange, user, onUserUpdated }: EditU
         if (emailError) throw emailError;
 
         // Also update email in users table
-        const { error: emailUpdateError } = await supabase
+        const { error: emailUpdateError } = await (supabase as any)
           .from('users')
           .update({ email: data.email })
           .eq('id', user.id);
