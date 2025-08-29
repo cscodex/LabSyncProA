@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Search, Plus, Download, Upload, Filter, MoreHorizontal, UserCheck, UserX, Edit, Trash2, FileText, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
@@ -106,7 +106,7 @@ export default function UserManagementPage() {
   }, [user, authLoading, router]);
 
   // Fetch users
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     if (!user || !['admin', 'super_admin'].includes(user.role)) return;
 
     try {
@@ -125,11 +125,11 @@ export default function UserManagementPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user, supabase]);
 
   useEffect(() => {
     fetchUsers();
-  }, [user, supabase]);
+  }, [user, supabase, fetchUsers]);
 
   // Filter users based on search and filters
   useEffect(() => {

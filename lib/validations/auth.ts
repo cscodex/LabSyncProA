@@ -181,6 +181,9 @@ export const calculatePasswordStrength = (password: string) => {
   };
 };
 
+// Export DEPARTMENTS for use in components
+export { DEPARTMENTS } from '@/types/auth.types';
+
 // Export types for form data
 export type LoginFormData = z.infer<typeof loginSchema>;
 export type RegisterFormData = z.infer<typeof registerSchema>;

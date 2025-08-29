@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Loader2, User, Mail, Phone, Building, IdCard, Save, Edit, Lock, Eye, EyeOff } from 'lucide-react';
+import { Loader2, User, Mail, Phone, Building, CreditCard, Save, Edit, Lock, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { z } from 'zod';
 
