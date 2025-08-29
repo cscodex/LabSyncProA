@@ -5,7 +5,14 @@ import type { Database } from '@/types/database.types';
 export const createSupabaseClient = () => {
   return createBrowserClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
+    }
   );
 };
 
@@ -123,22 +130,39 @@ export const validateEmailDomain = (email: string): boolean => {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 };
 
+// Helper function to check if user has remember me enabled
+export const hasRememberMeEnabled = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  return localStorage.getItem('labsyncpro_remember_me') === 'true';
+};
+
+// Helper function to set remember me preference
+export const setRememberMePreference = (remember: boolean): void => {
+  if (typeof window === 'undefined') return;
+
+  if (remember) {
+    localStorage.setItem('labsyncpro_remember_me', 'true');
+  } else {
+    localStorage.removeItem('labsyncpro_remember_me');
+  }
+};
+
 // Helper function to generate secure passwords
 export const generateSecurePassword = (length: number = 12): string => {
   const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
   let password = '';
-  
+
   // Ensure at least one character from each required category
   password += 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[Math.floor(Math.random() * 26)]; // uppercase
   password += 'abcdefghijklmnopqrstuvwxyz'[Math.floor(Math.random() * 26)]; // lowercase
   password += '0123456789'[Math.floor(Math.random() * 10)]; // number
   password += '!@#$%^&*'[Math.floor(Math.random() * 8)]; // special
-  
+
   // Fill the rest randomly
   for (let i = password.length; i < length; i++) {
     password += charset[Math.floor(Math.random() * charset.length)];
   }
-  
+
   // Shuffle the password
   return password.split('').sort(() => Math.random() - 0.5).join('');
 };

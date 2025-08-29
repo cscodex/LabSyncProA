@@ -12,6 +12,7 @@ export interface AuthUser {
   employee_id?: string | null;
   student_id?: string | null;
   phone_number?: string | null;
+  created_at?: string;
 }
 
 export interface LoginFormData {

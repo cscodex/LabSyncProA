@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useForm } from 'react-hook-form';
@@ -17,7 +17,7 @@ import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ThemeToggle } from '@/components/theme-toggle';
 
-import { createSupabaseClient, handleSupabaseError } from '@/lib/supabase';
+import { createSupabaseClient, handleSupabaseError, setRememberMePreference, hasRememberMeEnabled } from '@/lib/supabase';
 import { loginSchema, type LoginFormData } from '@/lib/validations/auth';
 import { SocialAuthButtons } from '@/components/auth/social-auth-buttons';
 
@@ -36,16 +36,28 @@ export default function LoginPage() {
     formState: { errors },
     setError,
     watch,
+    setValue,
   } = useForm<LoginFormData>({
     resolver: zodResolver(loginSchema),
+    defaultValues: {
+      rememberMe: false,
+    },
   });
 
   const rememberMe = watch('rememberMe');
 
+  // Initialize remember me state from localStorage
+  useEffect(() => {
+    const savedRememberMe = hasRememberMeEnabled();
+    setValue('rememberMe', savedRememberMe);
+  }, [setValue]);
+
   const onSubmit = async (data: LoginFormData) => {
+    console.log('Login form submitted:', data);
     setIsLoading(true);
 
     try {
+      // Configure session persistence based on remember me preference
       const { error } = await supabase.auth.signInWithPassword({
         email: data.email,
         password: data.password,
@@ -54,15 +66,12 @@ export default function LoginPage() {
       if (error) {
         const errorMessage = handleSupabaseError(error);
         setError('root', { message: errorMessage });
+        setIsLoading(false);
         return;
       }
 
       // Set remember me preference
-      if (data.rememberMe) {
-        localStorage.setItem('labsyncpro_remember_me', 'true');
-      } else {
-        localStorage.removeItem('labsyncpro_remember_me');
-      }
+      setRememberMePreference(data.rememberMe || false);
 
       toast.success('Successfully signed in!');
       router.push(redirectTo);
@@ -170,10 +179,10 @@ export default function LoginPage() {
 
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">
-                <Checkbox 
-                  id="rememberMe" 
-                  {...register('rememberMe')}
-                  checked={rememberMe}
+                <Checkbox
+                  id="rememberMe"
+                  checked={rememberMe || false}
+                  onCheckedChange={(checked) => setValue('rememberMe', !!checked)}
                 />
                 <Label htmlFor="rememberMe" className="text-sm cursor-pointer">
                   Remember me

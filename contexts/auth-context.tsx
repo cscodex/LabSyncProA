@@ -89,6 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           employee_id: (profile as any).employee_id,
           student_id: (profile as any).student_id,
           phone_number: (profile as any).phone_number,
+          created_at: (profile as any).created_at,
         };
 
         setUser(updatedUser);

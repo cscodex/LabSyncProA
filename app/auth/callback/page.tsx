@@ -22,35 +22,45 @@ export default function AuthCallbackPage() {
   useEffect(() => {
     const handleAuthCallback = async () => {
       try {
-        // Get current user to log the callback
-        const { data: { user }, error } = await supabase.auth.getUser();
+        console.log('Auth callback started');
 
-        if (user) {
-          EmailDebugger.logEmailConfirmation(user.email || 'unknown', {
-            action: 'auth_callback_success',
-            userId: user.id,
-            emailConfirmed: user.email_confirmed_at ? 'Yes' : 'No',
-            provider: user.app_metadata?.provider || 'email',
-          });
-        }
+        // Handle OAuth callback by exchanging code for session
+        const { data, error } = await supabase.auth.exchangeCodeForSession(window.location.href);
 
         if (error) {
+          console.error('Auth callback error:', error);
           EmailDebugger.logError('unknown', error, 'auth_callback_error');
           setError('Authentication failed. Please try again.');
+          setIsLoading(false);
           return;
         }
 
-        // Simple redirect to dashboard - let the auth context and route protection handle the rest
-        toast.success('Authentication completed!');
-        router.replace('/dashboard');
+        if (data.session?.user) {
+          console.log('Auth callback successful:', data.session.user.email);
+          EmailDebugger.logEmailConfirmation(data.session.user.email || 'unknown', {
+            action: 'auth_callback_success',
+            userId: data.session.user.id,
+            emailConfirmed: data.session.user.email_confirmed_at ? 'Yes' : 'No',
+            provider: data.session.user.app_metadata?.provider || 'email',
+          });
+
+          // Simple redirect to dashboard - let the auth context and route protection handle the rest
+          toast.success('Authentication completed!');
+          router.replace('/dashboard');
+        } else {
+          console.log('No session found in callback, redirecting to login');
+          router.replace('/auth/login');
+        }
       } catch (err) {
+        console.error('Auth callback catch error:', err);
         EmailDebugger.logError('unknown', err, 'auth_callback_catch_error');
         setError('Authentication failed. Please try again.');
+        setIsLoading(false);
       }
     };
 
-    // Small delay to show the loading state, then redirect
-    const timer = setTimeout(handleAuthCallback, 1000);
+    // Add a small delay to ensure the URL is processed
+    const timer = setTimeout(handleAuthCallback, 500);
 
     return () => clearTimeout(timer);
   }, [router, supabase]);
